@@ -11,7 +11,7 @@ import requests
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
 from engine import extractor, session_output
-from .scraper import fetch_page, _run_async
+from .scraper_stealth import fetch_page, _run_async
 
 PERPLEXITY_API_KEY = ""
 PERPLEXITY_MODEL = "sonar"

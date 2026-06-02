@@ -1,12 +1,8 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -26,27 +22,37 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Flask stuff:
-.flaskenv
-.flask.pid
-
-# Databases, credentials, and logs
-scout_results.db
-api_keys.txt
-debug-*.log
+# Virtual Environment
+venv/
+.venv/
+env/
 .env
-.env.*
+ENV/
+env.bak/
+venv.bak/
 
-# Local output and scratch folders
+# RunawayScout Local Data & Secrets
+api_keys.txt
+scout_results.db
 outputs/
-scratch/
+*.log
+.flask.pid
+report_fallback.html
+report_fallback.docx
+report_fallback.xlsx
+report_fallback.pdf
+report*.html
+report*.docx
+report*.xlsx
+report*.pdf
+report*.csv
 
-# IDE / System files
-.vscode/
+# Editors and IDEs
 .idea/
-.DS_Store
-Thumbs.db
-
-# Local scrapers not for GitHub
-engine/scraper_browserbase.py
-engine/scraper_stealth.py
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
