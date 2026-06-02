@@ -1,0 +1,19 @@
+flask>=3.0
+playwright>=1.40
+google-genai>=1.0
+markdownify>=0.13
+duckduckgo-search>=6.0
+pandas>=2.0
+openpyxl>=3.1
+requests>=2.31
+python-docx>=1.0
+python-pptx>=0.6.21
+youtube-transcript-api>=0.6.0
+google-api-python-client>=2.100
+Pillow>=10.0
+markdown>=3.0
+# Optional: weasyprint for PDF export (requires system-level dependencies)
+# Install with: pip install weasyprint
+# If not installed, PDF export falls back to HTML report
+# weasyprint>=60.0
+

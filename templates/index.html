@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RunawayScout — AI Research Studio</title>
+    <meta name="description" content="Conversational AI-Powered Research & Data Intelligence Assistant">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .tabs {
+            margin-bottom: 24px !important;
+        }
+        .tab-panel.hidden {
+            display: none !important;
+        }
+        .history-grid {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 24px;
+            align-items: start;
+            margin-top: 10px;
+        }
+        .history-sidebar-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            max-height: 800px;
+            overflow-y: auto;
+        }
+        .history-sidebar-card h3 {
+            font-size: 1.05rem;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
+        }
+        .history-list-tab {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .history-tab-item {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .history-tab-item:hover {
+            border-color: var(--accent);
+            background: rgba(129, 140, 248, 0.05);
+        }
+        .history-tab-item.active {
+            border-color: var(--accent);
+            background: var(--accent-dim);
+            box-shadow: 0 0 15px rgba(129, 140, 248, 0.1);
+        }
+        .history-tab-item .item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .history-tab-item .item-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            padding-right: 20px;
+        }
+        .history-tab-item .item-date {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+        .history-tab-item .history-delete-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.85rem;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .history-tab-item:hover .history-delete-btn {
+            opacity: 1;
+        }
+        .history-tab-item .history-delete-btn:hover {
+            color: var(--red);
+        }
+        .history-detail-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px;
+            min-height: 400px;
+        }
+        .history-detail-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            height: 350px;
+            color: var(--text-muted);
+        }
+        .history-detail-placeholder h3 {
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .refinement-card {
+            background: rgba(129, 140, 248, 0.03);
+            border: 1px dashed var(--accent);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-top: 24px;
+            margin-bottom: 24px;
+        }
+        .refinement-card h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: var(--accent);
+        }
+        .refinement-card .card-desc {
+            margin-bottom: 16px;
+        }
+        .input-block-details {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .input-block-details h4 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .input-block-details p {
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            margin: 0;
+        }
+        .answers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 12px;
+            margin-top: 8px;
+        }
+        .answer-box {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        .answer-box .ans-q {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+        .answer-box .ans-a {
+            font-size: 0.8rem;
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+        .spinner-sm {
+            width: 14px;
+            height: 14px;
+            border: 2px solid transparent;
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        @media (max-width: 992px) {
+            .history-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1>RunawayScout</h1>
+                    <p class="logo-sub">AI Research Studio</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <button class="btn-history" id="btnNewResearchGlobal" onclick="startNewResearchGlobal()" title="New Research" style="margin-right: 4px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                        <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    <span>+ New Research</span>
+                </button>
+                <button class="btn-history" id="btnToggleHistory" onclick="toggleHistory()" title="Research History">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    <span>History</span>
+                </button>
+                <button class="btn-config" onclick="showConfigModal()" title="Settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                        <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                    </svg>
+                </button>
+                <div class="header-status" id="statusBadge">
+                    <span class="status-dot"></span> Ready
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Config Modal -->
+    <div id="configModal" class="modal hidden" onclick="if(event.target === this) hideConfigModal()">
+        <div class="modal-inner">
+            <div class="modal-header">
+                <h3>⚙️ Settings</h3>
+                <button class="popup-close" onclick="hideConfigModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="configWarning" class="hidden" style="margin-bottom: 20px; padding: 12px 16px; border-radius: var(--radius-sm); background: var(--red-dim); border: 1px solid var(--red); color: var(--text-primary); font-size: 0.85rem;">
+                    <div style="font-weight: 700; margin-bottom: 4px; color: var(--red);">⚠️ API Quota Exhausted</div>
+                    <span id="configWarningText">Your Gemini API Key is missing or has exhausted its quota. Please provide a valid Gemini API Key to run research.</span>
+                </div>
+
+                <!-- Live Key Status Grid -->
+                <div id="configKeysSection" style="margin-bottom: 20px;">
+                    <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); display: block; margin-bottom: 8px; font-weight: 600;">Current API Keys in Rotation</span>
+                    <div id="configKeysGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 12px;">
+                        <!-- Key status cards render here -->
+                    </div>
+                    <span id="configKeyCount" style="font-size: 0.75rem; color: var(--text-muted);"></span>
+                </div>
+
+                <div class="form-group">
+                    <label>Add Gemini API Key <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 400;">(appended to pool — existing keys preserved)</span></label>
+                    <input type="password" id="geminiKey" placeholder="AIzaSy..." class="input" />
+                </div>
+                <div class="form-group">
+                    <label>Perplexity API Key (Optional — for deep source discovery)</label>
+                    <input type="password" id="perplexityKey" placeholder="pplx-..." class="input" />
+                </div>
+                <div class="form-group">
+                    <label>YouTube API Key (Optional — for video source metadata)</label>
+                    <input type="password" id="youtubeKey" placeholder="AIzaSy..." class="input" />
+                </div>
+                <button class="btn-primary" onclick="saveConfig()">Save Configurations</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Sidebar -->
+    <div id="sidebarBackdrop" class="sidebar-backdrop hidden" onclick="toggleHistory()"></div>
+    <aside id="historySidebar" class="history-sidebar hidden">
+        <div class="history-header">
+            <h3>📚 Research Sessions</h3>
+            <button class="popup-close" onclick="toggleHistory()">&times;</button>
+        </div>
+        <div id="historyList" class="history-list">
+            <div class="history-empty">No past research sessions found.</div>
+        </div>
+    </aside>
+    <!-- Tab Navigation -->
+    <div class="tabs">
+        <button class="tab active" id="tabNewResearch" onclick="switchTab('new-research')">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+            New Research Studio
+        </button>
+        <button class="tab" id="tabPastResearches" onclick="switchTab('past-researches')">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Past Researches Library
+        </button>
+    </div>
+
+    <main class="main">
+        <div id="panel-new-research" class="tab-panel">
+        <div class="studio-container">
+            <!-- STEP 1: INITIAL TOPIC INPUT -->
+            <section id="step-query" class="studio-card">
+                <div class="card-header-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                    </svg>
+                </div>
+                <h2>What would you like to research or compare?</h2>
+                <p class="card-desc">Enter any research topic, market segment, product comparison, or list of competitors. The AI will design a targeted blueprint and gather high-quality sources.</p>
+                
+                <div class="form-group">
+                    <textarea id="researchQuery" rows="3" placeholder="Compare the top 5 serverless database systems on pricing model, connection limits, and latency..." class="input textarea"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Additional Details or Guidelines (optional)</label>
+                    <input type="text" id="researchContext" class="input" placeholder="e.g., Focus on US and EU pricing models, include DynamoDB..." />
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group col-half">
+                        <label>Preferred Export Document Format</label>
+                        <select id="exportFormat" class="input select">
+                            <option value="pdf">Interactive PDF / HTML Report</option>
+                            <option value="docx">Word Document (.docx)</option>
+                            <option value="xlsx">Excel Data Sheet (.xlsx)</option>
+                            <option value="pptx">PowerPoint Presentation (.pptx)</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <button class="btn-primary" id="btnInitResearch" onclick="initiateResearch()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                    Analyze & Plan
+                </button>
+            </section>
+
+            <!-- STEP 2: CLARIFYING QUESTIONS -->
+            <section id="step-clarification" class="studio-card hidden">
+                <div class="card-header-icon highlight">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                </div>
+                <h2>Clarify Research Bounds</h2>
+                <p class="card-desc">Answer these custom-generated questions to ensure the research targets exactly what you need.</p>
+
+                <div id="assumptionsPanel" class="assumptions-panel hidden">
+                    <h3>Current Assumptions</h3>
+                    <ul id="assumptionsList"></ul>
+                </div>
+                
+                <div id="questionsContainer" class="questions-container">
+                    <!-- Loaded dynamically -->
+                </div>
+
+                <div class="clarification-note">
+                    <label for="clarificationNote">Add or correct the idea after reading these questions</label>
+                    <textarea id="clarificationNote" rows="3" class="input textarea" placeholder="Example: Actually focus on Indian D2C brands, include customer complaints from Reddit, and ignore pre-2023 sources."></textarea>
+                </div>
+                
+                <div class="studio-actions">
+                    <button class="btn-secondary" onclick="resetToQuery()">Back</button>
+                    <button class="btn-secondary" id="btnAskFollowup" onclick="askFollowupQuestions()">
+                        Ask Follow-Up Questions
+                    </button>
+                    <button class="btn-primary" onclick="submitClarifications()">
+                        Generate Research Blueprint
+                    </button>
+                </div>
+            </section>
+
+            <!-- STEP 3: BLUEPRINT & VECTORS -->
+            <section id="step-blueprint" class="studio-card hidden">
+                <div class="card-header-icon success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+                    </svg>
+                </div>
+                <h2>Research Blueprint</h2>
+                <p class="card-desc">Review the master prompt and parallel vectors that the AI has designed for this research session.</p>
+                
+                <div class="form-group">
+                    <label>Refined Master Prompt</label>
+                    <textarea id="refinedPrompt" rows="4" class="input textarea" readonly></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Parallel Research Vectors (Topics to Scrape)</label>
+                    <div id="vectorsList" class="vectors-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+
+                <div class="studio-actions">
+                    <button class="btn-secondary" onclick="resetToClarifications()">Back</button>
+                    <button class="btn-primary" onclick="startVectorResearch()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                        Start Agentic Research
+                    </button>
+                </div>
+            </section>
+
+            <!-- STEP 4: STREAMING PROGRESS -->
+            <section id="step-progress" class="studio-card hidden">
+                <div class="progress-header">
+                    <div class="spinner"></div>
+                    <div>
+                        <h3 id="progressStatusText">Agentic Research in Progress...</h3>
+                        <p id="progressSubText" class="card-desc">Analyzing sources, reading page content, and extracting insights...</p>
+                    </div>
+                </div>
+                <div class="progress-bar-track">
+                    <div class="progress-bar-fill" id="studioProgressBar"></div>
+                </div>
+                
+                <div class="active-vectors-tracker" id="activeVectorsTracker">
+                    <!-- Vector progression rows will render here -->
+                </div>
+
+                <div class="research-status-dashboard" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <span style="font-size: 0.9rem; font-weight: 600; color: var(--text-secondary);">Sources Captured so far: <span id="dashboardSourceCount" style="color: var(--accent); font-weight: 700;">0</span></span>
+                    </div>
+                    <div class="api-cells-container">
+                        <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); display: block; margin-bottom: 8px; font-weight: 600;">API Rotation Cells Status</span>
+                        <div id="apiCellsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px;">
+                            <!-- Active rotation cells will render here -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- STEP 5: FINAL REPORT RESULTS -->
+            <section id="step-results" class="studio-card hidden">
+                <div class="results-report-header">
+                    <div class="results-titles">
+                        <h2 id="reportTitle">Research Findings</h2>
+                        <div class="meta-info" id="reportMeta">Compiled dynamically</div>
+                    </div>
+                    <div class="results-downloads" id="exportContainer">
+                        <!-- Download buttons generated here -->
+                    </div>
+                </div>
+
+                <!-- Executive Summary -->
+                <div class="report-exec-summary">
+                    <h3>Executive Summary</h3>
+                    <p id="reportSummaryText"></p>
+                    
+                    <div class="takeaways-list-container hidden" id="takeawaysContainer">
+                        <h4>Key Takeaways</h4>
+                        <ul id="takeawaysList"></ul>
+                    </div>
+                </div>
+
+                <!-- Report Sections tabs / accordions -->
+                <div class="report-sections" id="reportSectionsContainer">
+                    <!-- Detailed section content, tables, and insight lists -->
+                </div>
+
+                <!-- Sources Found -->
+                <div class="sources-card">
+                    <h3>Authoritative Sources Compiled</h3>
+                    <div id="resultsSourcesList" class="sources-list-grid"></div>
+                </div>
+
+                <!-- Refinement Box -->
+                <div class="refinement-card" id="resultsRefinementCard">
+                    <h3>💡 Refine this Research</h3>
+                    <p class="card-desc">Don't like something or want specific improvements? Type what you want to change (e.g., "remove competitor X", "summarize latency details in a table") and the AI will update the findings instantly.</p>
+                    <div class="form-group">
+                        <textarea id="refinementInput" rows="2" placeholder="e.g. Please format pricing in Indian Rupees and add a bullet summarizing key delivery times..." class="input textarea"></textarea>
+                    </div>
+                    <button class="btn-primary" id="btnApplyRefinement" onclick="applyRefinement(false)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon" width="16" height="16">
+                            <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6m12-4a9 9 0 0 1-15 6.7L3 16"/>
+                        </svg>
+                        Apply Refinement
+                    </button>
+                </div>
+
+                <div class="studio-actions" style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
+                    <button class="btn-primary" onclick="resetToQuery()">New Research Query</button>
+                </div>
+            </section>
+        </div>
+        </div> <!-- End of #panel-new-research -->
+
+        <!-- Past Researches Tab Content -->
+        <div id="panel-past-researches" class="tab-panel hidden">
+            <div class="studio-container">
+                <div class="history-grid">
+                    <!-- Left: Sidebar List of Sessions -->
+                    <div class="history-sidebar-card">
+                        <h3>📚 Saved Sessions</h3>
+                        <div id="historyListTab" class="history-list-tab">
+                            <div class="history-empty">Loading past research sessions...</div>
+                        </div>
+                    </div>
+                    <!-- Right: Detailed Session View -->
+                    <div class="history-detail-card" id="historyDetailCard">
+                        <div class="history-detail-placeholder">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48" style="color: var(--text-muted); margin-bottom: 1rem;">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+                            </svg>
+                            <h3>Select a past research session to view details</h3>
+                            <p>Here you can see the original prompt, clarification questions, final report and refine it further.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+{
+    "session_id": "<run_id>",
+    "synthesis_mode": "fallback_no_api",
+    "status": "incomplete_fallback",
+    "completed_vectors": 0,
+    "total_vectors": 0,
+    "completed_vector_ids": [],
+    "upgradeable": [],
+    "vectors": [
+        {
+            "id": "v1",
+            "topic": "<human-readable section title>",
+            "status": "SUCCESS"
+        },
+        {
+            "id": "v2",
+            "topic": "<human-readable section title>",
+            "status": "LOW_COVERAGE"
+        },
+        {
+            "id": "v3",
+            "topic": "<human-readable section title>",
+            "status": "EMPTY"
+        }
+    ],
+    "rotation_cells": [
+        {
+            "key_index": 1,
+            "tier": "strong",
+            "cooldown_until": 0,
+            "exhausted_today": true,
+            "is_active": false
+        },
+        {
+            "key_index": 1,
+            "tier": "mid",
+            "cooldown_until": 0,
+            "exhausted_today": true,
+            "is_active": false
+        },
+        {
+            "key_index": 1,
+            "tier": "cheap",
+            "cooldown_until": 0,
+            "exhausted_today": true,
+            "is_active": false
+        }
+    ],
+    "last_updated": "<iso8601 timestamp>",
+    "_notes": {
+        "synthesis_mode": "Set to 'fallback_no_api' by fallback_synth.py (Synthesis.md §7.6).",
+        "status": "'incomplete_fallback' tells resume logic to run AI synthesis only over unsettled/upgradeable vectors on next reset.",
+        "upgradeable": "vector_ids graded LOW_COVERAGE — eligible for re-synthesis when quota returns.",
+        "vectors[].status": "Per-vector verdict from the §8 status taxonomy in API_Limit_Tuning.md."
+    }
+}

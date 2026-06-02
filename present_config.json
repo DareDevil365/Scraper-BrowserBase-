@@ -1,0 +1,111 @@
+{
+    "_about": "Tunables for present.py (Synthesis.md §8). Pure config; no code changes needed to retune. All keys optional — present.py falls back to these defaults if the file is absent.",
+    "formats": {
+        "_note": "Used when run_config.output_format is missing AND no --formats flag is passed.",
+        "default": [
+            "docx",
+            "html",
+            "pdf"
+        ],
+        "pdf_engine_order": [
+            "reportlab",
+            "pandoc"
+        ]
+    },
+    "body_precedence": {
+        "_note": "Order present.py searches for the prose body; first existing wins (§8.3).",
+        "order": [
+            "final_report_v2.md",
+            "final_report_v1.md",
+            "final_report_fallback.md",
+            "partial_report.md"
+        ]
+    },
+    "visual_detection": {
+        "_note": "Shape thresholds (§8.4). Looser = more charts/tables; stricter = more prose.",
+        "timeline": {
+            "min_events": 2,
+            "date_keys": [
+                "date",
+                "year",
+                "when",
+                "time",
+                "timestamp"
+            ],
+            "label_keys": [
+                "event",
+                "description",
+                "milestone",
+                "title"
+            ]
+        },
+        "table": {
+            "min_rows": 2,
+            "min_shared_keys": 2,
+            "max_shared_keys": 8
+        },
+        "bar_chart": {
+            "min_numeric_values": 3
+        }
+    },
+    "coverage": {
+        "_note": "Badge grading (§8.5). Defers to state.json.vector_status when present.",
+        "prefer_state_json": true,
+        "low_coverage_max_leaves": 2,
+        "badges": {
+            "RICH": "🟢 RICH",
+            "PARTIAL": "🟡 PARTIAL",
+            "LOW_COVERAGE": "⚠️ LOW COVERAGE",
+            "EMPTY": "⚪ EMPTY"
+        }
+    },
+    "sources": {
+        "_note": "Junk-domain flagging (§8.5). Matched substrings get pushed to the bottom with a marker, not deleted (kept for audit).",
+        "dedupe_by": "url",
+        "group_by": "vector_id",
+        "junk_marker": "⚠ off-topic",
+        "junk_domain_substrings": [
+            "dictionary.cambridge.org",
+            "merriam-webster.com",
+            "thefreedictionary.com",
+            "britannica.com/dictionary",
+            "apdpms.ap.gov.in",
+            "wiktionary.org",
+            "translate.google"
+        ]
+    },
+    "banner": {
+        "_note": "Re-stamped across all formats when the body is the fallback file (§8.6).",
+        "fallback_text": "⚠️ MECHANICALLY ASSEMBLED — no AI synthesis ran; structured from extracted data only.",
+        "trigger_synthesis_modes": [
+            "fallback_no_api",
+            "incomplete_fallback"
+        ]
+    },
+    "presentation": {
+        "mode": "useful_only",
+        "drop_raw_sources": true,
+        "drop_debug_figures": true,
+        "drop_placeholder_sections": true,
+        "dedupe_sources": true,
+        "source_scope": "used_or_successful_only",
+        "max_sources": 40,
+        "collapse_empty_vectors_to_gaps": true,
+        "show_coverage_gaps": true,
+        "prefer_tables_for_structured_data": true,
+        "forbidden_phrases": [
+            "Failed to synthesize section",
+            "All Gemini API keys are completely exhausted",
+            "Insufficient data captured",
+            "No data found for vector",
+            "504 DEADLINE_EXCEEDED"
+        ],
+        "junk_domains": [
+            "vertexaisearch.cloud.google.com",
+            "dictionary.cambridge.org",
+            "merriam-webster.com",
+            "thefreedictionary.com",
+            "web.travelunion.in"
+        ]
+    }
+}
