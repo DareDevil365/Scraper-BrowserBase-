@@ -1,0 +1,95 @@
+ESCROW MODEL
+Does it use escrow? (Yes / No / Escrow-like):
+Who holds the funds?:
+When are funds collected? (Before work / At order / On delivery):
+
+RELEASE TRIGGERS
+What triggers the escrow release?
+
+AUTO-RELEASE
+Is there an auto-release? (Yes / No):
+If yes, how many days after delivery?:
+
+DISPUTE HANDLING
+Who decides disputes?:
+What is the resolution timeline?:
+What evidence does the buyer/seller need to submit?:
+
+PROVIDER PROTECTION
+Does the platform protect providers from chargebacks? (Yes / No / Partial)
+Any coverage cap on orders (e.g. max ₹X covered)?
+What happens to the provider if the buyer disputes unfairly?
+-->Apart from these cover all the exhaustive scenarios
+
+KEY INSIGHT FOR SILAAI
+What is the single most useful thing Silaai should borrow or avoid from this model? 
+
+SOURCES USED
+
+
+
+
+
+
+
+
+
+
+
+
+
+Example :
+
+ETSY — Custom / Handmade Physical Goods Marketplace
+
+
+PLATFORM TYPE: C2C / B2C physical goods marketplace (handmade, custom,
+  vintage). Most comparable to Silaai's textile marketplace and custom
+  alterations/garment orders.
+
+  PAYMENT FLOW:
+  - Buyer pays Etsy directly at checkout via Etsy Payments.
+  - Etsy holds funds; seller does NOT receive money until Etsy processes payment.
+  - Funds are released to the seller's Etsy Payments account after the order
+    is completed and the standard processing period passes.
+  - There is no hard "buyer confirmation" trigger for standard orders. The
+    seller is paid on fulfillment + standard processing cycle, not on
+    explicit buyer approval.
+
+  KEY PROTECTION MECHANISM — PURCHASE PROTECTION PROGRAMME (PPP):
+  - Etsy may cover buyer refunds up to $250 USD per eligible order.
+  - Orders above $250 USD are NOT covered by PPP. For these, if a dispute
+    is resolved in the buyer's favour, the seller bears full cost.
+  - Buyers have up to 100 days after the estimated delivery date to open a case.
+  - Before opening a case, there must be a 48-hour waiting window after the
+    buyer first contacts the seller about the problem.
+  - A case closes automatically when: (a) full refund is issued to buyer via
+    Etsy Payments, or (b) buyer closes it as satisfied.
+
+  ESCROW RELEASE TRIGGERS (IMPLICIT IN ETSY'S MODEL):
+  Trigger 1: Order marked as shipped with valid tracking number
+  Trigger 2: Estimated delivery date passes without dispute
+  Trigger 3: Buyer confirms receipt (optional but can accelerate)
+  Trigger 4: Case window (100 days) expires without a dispute being opened
+
+  DISPUTE LOGIC:
+  - If buyer opens a case: Etsy reviews. Seller must respond within 48 hours.
+  - If Etsy rules in buyer's favour AND the order is PPP-eligible (≤$250):
+    Etsy refunds buyer from its own funds, and seller keeps earnings.
+  - If order is above $250: refund comes directly from the seller's Etsy
+    Payments account or saved card. Seller bears loss.
+  - Seller can appeal decisions using Etsy's appeals page.
+
+  KEY INSIGHT FOR SILAAI:
+  >> Etsy's model shows that custom/handmade sellers are HIGHLY VULNERABLE on
+     high-value orders. The $250 coverage cap means expensive bridal couture
+     or bulk orders have no platform-level protection. Silaai must define its
+     own coverage threshold, especially since custom tailoring in India regularly
+     exceeds INR 5,000–20,000+ per order. A tiered coverage model is needed.
+  >> The 100-day dispute window is long and creates extended uncertainty for
+     providers. Silaai should consider a shorter, defined dispute window linked
+     to garment delivery + inspection (e.g., 7–14 days after confirmed receipt).
+  >> Etsy's policy update in March 2026 narrowed late-delivery cases to "7+
+     days after estimated delivery date" — signalling that over-generous buyer
+     dispute windows create seller strain and platform abuse.
+

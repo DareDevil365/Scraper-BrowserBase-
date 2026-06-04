@@ -40,7 +40,17 @@ Emit vectors, each with a stable `id` (`vector_id`), `topic`, `description`,
 and **idempotent sectioned synthesis** (`API_Limit_Tuning.md` §4.4) — 1 vector ⇒ 1
 synthesis section (prevents duplicate/extra sections).
 
-### 1.4 Effort estimate (T1)
+### 1.4 Dynamic Depth Adaptation (Escalation Budgeting)
+- **Signal**: If early scraping for a vector yields only `LOW_COVERAGE` extraction data or contradictory metrics across Tier 1 sources, trigger an automatic depth escalation.
+- **Budget Escalation**: Automatically increase the search depth parameter (e.g. from `surface` to `standard`, or `standard` to `deep`) for that specific vector.
+- **Fanning Expansion**: Generate 3-5 additional high-priority queries and queue 5-8 more sources in `scrape_queue.json` specifically targeting the gap area.
+
+### 1.5 Human-in-the-Loop Conflict Checkpoints
+- **Contradiction Threshold**: When two high-authority sources (Tier 1 or Tier 2) assert directly contradictory numerical values or specifications (e.g., $10/mo vs. $45/mo for the same plan), write a conflict block to `state.json`.
+- **Interactive Checkpoint**: Write the conflict description, URLs, and snippets to the state file and flag the session status as `paused_conflict`.
+- **UI Intervention**: The web interface displays a modal asking the user to select the correct value or enter a custom overrides value. If no input is received, fallback to the more recent source after a timeout.
+
+### 1.6 Effort estimate (T1)
 Emit `estimated_work = {sources_to_discover, pages_to_scrape, synthesis_passes}`
 (core §3.2), scaled by `depth`.
 

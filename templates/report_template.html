@@ -1,107 +1,477 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ title }}</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>
+  // Dynamic theme variables for Mermaid
+  function getMermaidTheme() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return {
+      theme: isDark ? 'dark' : 'default',
+      securityLevel: 'loose',
+      themeVariables: isDark ? {
+        background: '#111122',
+        primaryColor: '#6366f1',
+        primaryTextColor: '#f3f4f6',
+        lineColor: '#4f46e5'
+      } : {
+        background: '#f8fafc',
+        primaryColor: '#4f46e5',
+        primaryTextColor: '#1e293b',
+        lineColor: '#6366f1'
+      }
+    };
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    mermaid.initialize({ startOnLoad: true, ...getMermaidTheme() });
+    
+    // Smooth navigation TOC scroll spy
+    const links = document.querySelectorAll('.toc-item a');
+    const sections = document.querySelectorAll('section, header');
+    
+    window.addEventListener('scroll', () => {
+      let current = '';
+      sections.forEach(section => {
+        const sectionTop = section.offsetTop;
+        if (window.pageYOffset >= sectionTop - 150) {
+          current = section.getAttribute('id');
+        }
+      });
+      links.forEach(link => {
+        link.classList.remove('active');
+        if (link.getAttribute('href') === `#${current}`) {
+          link.classList.add('active');
+        }
+      });
+    });
+  });
+
+  // Switch dark/light themes dynamically
+  function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+    
+    // Re-render mermaid diagrams with new colors
+    setTimeout(() => {
+      const mermaidDivs = document.querySelectorAll('.mermaid');
+      mermaidDivs.forEach(div => {
+        // Force refresh SVG
+        const code = div.getAttribute('data-processed') ? div.textContent : div.innerHTML;
+        div.removeAttribute('data-processed');
+        div.innerHTML = code;
+      });
+      mermaid.initialize({ startOnLoad: true, ...getMermaidTheme() });
+      mermaid.init();
+    }, 100);
+  }
+</script>
 <style>
-  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a2e; }
-  h1 { font-size: 1.9rem; margin-bottom: 0.2rem; }
-  .meta { color: #6b7280; font-size: 0.9rem; margin-bottom: 1.5rem; }
-  .banner { background: #fff7e6; border: 1px solid #f0c674; border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1rem 0; font-weight: bold; color: #b06a00; }
-  h2 { border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3rem; margin-top: 2rem; }
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.9rem; }
-  th, td { border: 1px solid #e5e7eb; padding: 0.5rem 0.8rem; text-align: left; vertical-align: top; }
-  th { background: #f9fafb; }
-  ul { padding-left: 1.2rem; }
-  li { margin: 0.3rem 0; }
+  :root[data-theme="dark"] {
+    --bg-main: hsl(230, 25%, 8%);
+    --bg-card: hsla(230, 20%, 15%, 0.6);
+    --border-color: hsla(235, 100%, 75%, 0.15);
+    --accent: hsl(235, 100%, 72%);
+    --accent-glow: hsla(235, 100%, 72%, 0.3);
+    --text-primary: hsl(220, 15%, 95%);
+    --text-secondary: hsl(220, 10%, 70%);
+    --table-header-bg: hsla(235, 100%, 72%, 0.15);
+    --code-bg: hsl(230, 20%, 12%);
+    --shadow: 0 12px 40px -10px rgba(0, 0, 0, 0.7);
+  }
+  
+  :root[data-theme="light"] {
+    --bg-main: hsl(220, 15%, 98%);
+    --bg-card: hsla(220, 20%, 100%, 0.85);
+    --border-color: hsla(235, 75%, 50%, 0.1);
+    --accent: hsl(235, 75%, 55%);
+    --accent-glow: hsla(235, 75%, 55%, 0.15);
+    --text-primary: hsl(220, 20%, 15%);
+    --text-secondary: hsl(220, 15%, 45%);
+    --table-header-bg: hsla(235, 75%, 55%, 0.1);
+    --code-bg: hsl(220, 15%, 93%);
+    --shadow: 0 12px 30px -10px rgba(99, 102, 241, 0.1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+    line-height: 1.65;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 2rem;
+    padding: 2rem;
+  }
+
+  /* Sticky Sidebar Left */
+  .sidebar {
+    position: sticky;
+    top: 2rem;
+    height: calc(100vh - 4rem);
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 1.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    overflow-y: auto;
+    box-shadow: var(--shadow);
+  }
+
+  .sidebar h3 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.2rem;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 0.5rem;
+  }
+
+  .toc-list { list-style: none; display: flex; flex-direction: column; gap: 0.8rem; }
+  .toc-item a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    display: block;
+    border-left: 2px solid transparent;
+    padding-left: 10px;
+  }
+  .toc-item a:hover, .toc-item a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    padding-left: 14px;
+  }
+
+  .theme-btn {
+    margin-top: auto;
+    padding: 0.75rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: opacity 0.2s;
+  }
+  .theme-btn:hover { opacity: 0.9; }
+
+  /* Main Report Right */
+  main { min-width: 0; }
+
+  .report-header {
+    background: linear-gradient(135deg, var(--accent-glow) 0%, transparent 100%);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 3rem;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+
+  h1 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 2.8rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    line-height: 1.2;
+    background: linear-gradient(to right, var(--text-primary), var(--accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .meta {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 2rem;
+  }
+
+  /* Scope & Answers Transcript Box (Compliance Panel) */
+  .compliance-panel {
+    background: var(--bg-card);
+    border: 1px dashed var(--accent);
+    border-radius: 16px;
+    padding: 1.8rem;
+    margin-bottom: 2.5rem;
+    box-shadow: var(--shadow);
+  }
+  .compliance-panel summary {
+    cursor: pointer;
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: var(--accent);
+  }
+  .compliance-content {
+    margin-top: 1.2rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+  }
+  .transcript-item {
+    margin-bottom: 1rem;
+  }
+  .transcript-q {
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .transcript-a {
+    color: var(--text-secondary);
+    background: var(--code-bg);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    margin-top: 0.25rem;
+  }
+
+  /* Sections */
+  .section-card {
+    background: var(--bg-card);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 2.5rem;
+    margin-bottom: 2.5rem;
+    box-shadow: var(--shadow);
+  }
+
+  h2 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.8rem;
+    margin-bottom: 1.5rem;
+    border-left: 5px solid var(--accent);
+    padding-left: 0.8rem;
+  }
+
+  p { margin-bottom: 1.2rem; color: var(--text-primary); font-size: 1rem; }
+  ul, ol { margin-bottom: 1.2rem; padding-left: 1.8rem; }
+  li { margin-bottom: 0.6rem; color: var(--text-primary); }
+
+  /* Premium Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.8rem 0;
+    font-size: 0.95rem;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow);
+  }
+  th, td { padding: 1rem 1.2rem; text-align: left; }
+  th {
+    background-color: var(--table-header-bg);
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+  }
+  tr { border-bottom: 1px solid var(--border-color); }
+  tr:nth-child(even) { background-color: rgba(255, 255, 255, 0.02); }
+  tr:hover { background-color: rgba(255, 255, 255, 0.04); }
+
+  /* Mermaid Diagrams Container */
+  .mermaid {
+    background: #111122 !important;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 2rem;
+    margin: 2rem 0;
+    display: flex;
+    justify-content: center;
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+
+  /* Polished Image Embedding with Fallbacks */
+  .image-wrapper {
+    position: relative;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+    margin: 2rem 0;
+    box-shadow: var(--shadow);
+  }
+  .report-img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .image-fallback {
+    display: none;
+    padding: 2rem;
+    background: var(--code-bg);
+    text-align: center;
+    color: var(--text-secondary);
+  }
+  .image-fallback a { color: var(--accent); font-weight: 600; }
+  
+  /* Show fallback if image errors out */
+  .report-img-failed { display: none !important; }
+  .report-img-failed + .image-fallback { display: block !important; }
+
+  @media (max-width: 1024px) {
+    .container { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+  }
 </style>
 </head>
 <body>
 
-<h1>{{ title }}</h1>
+<div class="container">
+  <aside class="sidebar">
+    <h3>Contents</h3>
+    <ul class="toc-list">
+      <li class="toc-item"><a href="#compliance" class="active">Scope Transcript</a></li>
+      {% if executive_summary %}
+      <li class="toc-item"><a href="#executive-summary">Executive Summary</a></li>
+      {% endif %}
+      {% for section in sections %}
+      <li class="toc-item"><a href="#sec-{{ loop.index }}">{{ section.title }}</a></li>
+      {% endfor %}
+      {% for table in tables %}
+      <li class="toc-item"><a href="#table-{{ loop.index }}">{{ table.title }}</a></li>
+      {% endfor %}
+      {% if sources %}
+      <li class="toc-item"><a href="#sources">Sources</a></li>
+      {% endif %}
+    </ul>
+    <button class="theme-btn" onclick="toggleTheme()">🌓 Switch Theme</button>
+  </aside>
 
-<p class="meta">
-  Session {{ session_id }} &middot; {{ generated_at }} &middot; status: {{ status }}
-</p>
+  <main>
+    <header id="compliance" class="report-header">
+      <h1>{{ title }}</h1>
+      <div class="meta">
+        <span>🗓️ {{ generated_at }}</span>
+        <span>🆔 Session: {{ session_id }}</span>
+      </div>
+    </header>
 
-{% if banner %}
-<div class="banner">{{ banner }}</div>
-{% endif %}
+    <!-- Verbatim Clarifications Panel -->
+    <details class="compliance-panel" open>
+      <summary>🔍 Scope & Clarifications Transcript (Verbatim Compliance)</summary>
+      <div class="compliance-content">
+        <div class="transcript-item">
+          <p class="transcript-q">Original User Query:</p>
+          <div class="transcript-a">{{ original_query }}</div>
+        </div>
+        {% if clarification_answers %}
+        {% for ans in clarification_answers %}
+        <div class="transcript-item">
+          <p class="transcript-q">Clarification Q: {{ ans.question }}</p>
+          <div class="transcript-a">A: {{ ans.answer }}</div>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+    </details>
 
-{% if executive_summary %}
-<h2>Executive Summary</h2>
-<p>{{ executive_summary }}</p>
-{% endif %}
-
-{% if key_takeaways %}
-<h2>Key Takeaways</h2>
-<ul>
-  {% for item in key_takeaways %}
-  <li>{{ item }}</li>
-  {% endfor %}
-</ul>
-{% endif %}
-
-{% for section in sections %}
-<h2>{{ section.title }}</h2>
-<div>
-  {{ section.body | safe }}
-</div>
-{% endfor %}
-
-{% for table in tables %}
-<h2>{{ table.title }}</h2>
-<table>
-  <thead>
-  <tr>
-  {% for header in table.headers %}
-  <th>{{ header }}</th>
-  {% endfor %}
-  </tr>
-  </thead>
-  <tbody>
-  {% for row in table.rows %}
-  <tr>
-  {% for cell in row %}
-  <td>
-    {% if cell is string and (cell.startswith('http://') or cell.startswith('https://')) %}
-    <a href="{{ cell }}" target="_blank">Link</a>
-    {% else %}
-    {{ cell | replace('\n', '<br/>') | safe }}
+    {% if executive_summary %}
+    <section id="executive-summary" class="section-card">
+      <h2>Executive Summary</h2>
+      <p>{{ executive_summary }}</p>
+    </section>
     {% endif %}
-  </td>
-  {% endfor %}
-  </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endfor %}
 
-{% if gaps %}
-<h2>Coverage Gaps</h2>
-<ul>
-  {% for gap in gaps %}
-  <li><strong>{{ gap.topic }}</strong>: {{ gap.reason }}</li>
-  {% endfor %}
-</ul>
-{% endif %}
+    <!-- Report Sections -->
+    {% for section in sections %}
+    <section id="sec-{{ loop.index }}" class="section-card">
+      <h2>{{ section.title }}</h2>
+      <div>
+        {{ section.body | safe }}
+      </div>
+    </section>
+    {% endfor %}
 
-{% if sources %}
-<h2>Sources</h2>
-<ol>
-  {% for src in sources %}
-  <li>
-  {% if src.url %}
-  <a href="{{ src.url }}" target="_blank">{{ src.title }}</a>
-  {% else %}
-  {{ src.title }}
-  {% endif %}
-  — {{ src.domain }}
-  {% if src.tier %}<em>({{ src.tier }})</em>{% endif %}
-  </li>
-  {% endfor %}
-</ol>
-{% endif %}
+    <!-- Comparison Tables -->
+    {% for table in tables %}
+    <section id="table-{{ loop.index }}" class="section-card">
+      <h2>{{ table.title }}</h2>
+      <table>
+        <thead>
+          <tr>
+            {% for header in table.headers %}
+            <th>{{ header }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in table.rows %}
+          <tr>
+            {% for cell in row %}
+            <td>
+              {% if cell is string and (cell.startswith('http://') or cell.startswith('https://')) %}
+              <a href="{{ cell }}" target="_blank" style="color: var(--accent);">Link</a>
+              {% else %}
+              {{ cell | replace('\n', '<br/>') | safe }}
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endfor %}
 
+    <!-- Sources & References -->
+    {% if sources %}
+    <section id="sources" class="section-card">
+      <h2>Sources & References</h2>
+      <ol style="padding-left: 1.5rem;">
+        {% for src in sources %}
+        <li style="margin-bottom: 0.8rem;">
+          {% if src.url %}
+          <a href="{{ src.url }}" target="_blank" style="color: var(--accent); font-weight: 500;">{{ src.title }}</a>
+          {% else %}
+          {{ src.title }}
+          {% endif %}
+          <span style="color: var(--text-secondary); font-size: 0.88rem;">— {{ src.domain }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+    {% endif %}
+  </main>
+</div>
+
+<script>
+  // Image error handling callback
+  document.querySelectorAll('.report-img').forEach(img => {
+    img.addEventListener('error', function() {
+      this.classList.add('report-img-failed');
+      const srcUrl = this.getAttribute('src');
+      let domain = "";
+      try {
+        domain = new URL(srcUrl).hostname;
+      } catch (e) {
+        domain = "Source Website";
+      }
+      const fallbackDiv = this.nextElementSibling;
+      if (fallbackDiv && fallbackDiv.classList.contains('image-fallback')) {
+        fallbackDiv.innerHTML = `🖼️ <strong>Image failed to load</strong><br><small>Source domain: ${domain}</small><br><a href="${srcUrl}" target="_blank">View original page image</a>`;
+      }
+    });
+  });
+</script>
 </body>
 </html>

@@ -195,9 +195,10 @@ def _call_gemini(contents: str, config=None, tier: str = "cheap", judgment: bool
                 if is_rate_limit:
                     is_hard_quota = any(x in error_str for x in ["limit: 0", "exceeded your current quota", "quota exceeded", "daily limit"])
                     if is_hard_quota:
-                        print(f"    [!] Hard quota limit hit for cell ({key_idx + 1}, {active_tier}) using {model_name}.")
+                        print(f"    [!] Hard quota limit hit for cell ({key_idx + 1}, {active_tier}) using {model_name}. Marking all tiers for Key #{key_idx + 1} as exhausted.")
                         with _rotation_lock:
-                            _cell_states[(key_idx, active_tier)]["exhausted_today"] = True
+                            for t in ["strong", "mid", "cheap"]:
+                                _cell_states[(key_idx, t)]["exhausted_today"] = True
                         break  # Break model loop to try the next key/cell
                     else:
                         cooldown_sec = _parse_cooldown_from_error(error_str)
@@ -206,9 +207,10 @@ def _call_gemini(contents: str, config=None, tier: str = "cheap", judgment: bool
                             print(f"    [!] Model {model_name} on cell ({key_idx + 1}, {active_tier}) overloaded/unavailable. Trying next model in tier...")
                             continue  # Try the next model for the same key
                         else:
-                            print(f"    [!] Cell ({key_idx + 1}, {active_tier}) rate limited using {model_name}. Cooling down for {cooldown_sec}s.")
+                            print(f"    [!] Cell ({key_idx + 1}, {active_tier}) rate limited using {model_name}. Cooling down all tiers of Key #{key_idx + 1} for {cooldown_sec}s.")
                             with _rotation_lock:
-                                _cell_states[(key_idx, active_tier)]["cooldown_until"] = time.time() + cooldown_sec
+                                for t in ["strong", "mid", "cheap"]:
+                                    _cell_states[(key_idx, t)]["cooldown_until"] = time.time() + cooldown_sec
                             break  # Break model loop to try the next key/cell
                 else:
                     print(f"    Gemini error on cell ({key_idx + 1}, {active_tier}) using {model_name}: {e}")
@@ -511,7 +513,7 @@ def _parse_json_response(text: str):
     return None
 
 
-def synthesize_research(vectors_data: list[dict], original_query: str, format_hint: str = '', chunk_callback=None) -> dict:
+def synthesize_research(vectors_data: list[dict], original_query: str, format_hint: str = '', chunk_callback=None, required_deliverables: list = None) -> dict:
     """
     Takes all extracted data from all research vectors and creates a unified synthesis.
     Uses Gemini to:
@@ -527,22 +529,32 @@ def synthesize_research(vectors_data: list[dict], original_query: str, format_hi
     # Structure the inputs
     vectors_text = json.dumps(vectors_data, indent=2, default=str)
     
+    deliverables_text = ""
+    if required_deliverables:
+        deliverables_text = "\nCRITICAL USER REQUIREMENTS (MUST BE FULLY SATISFIED AND COMPLETED):\n" + "\n".join([f"- {item}" for item in required_deliverables])
+        
     prompt = f"""You are a senior market research analyst. Synthesize the following raw research findings collected across multiple vectors into a professional, cohesive research report.
-
+ 
 Original User Query: "{original_query}"
 Format Hint / Output preference: "{format_hint}"
-
+{deliverables_text}
+ 
 Raw Vector Findings:
 {vectors_text}
-
-Analyze and combine these findings. Resolve conflicts where possible. Present the final synthesis in structured JSON matching this exact schema:
+ 
+Analyze and combine these findings. Resolve conflicts where possible.
+CRITICAL REQUIREMENTS FOR SYNTHESIS:
+1. You MUST ensure that every single item listed in the CRITICAL USER REQUIREMENTS (such as specific comparisons, lists, tables, timelines, roadmaps, or questions) is explicitly and fully addressed, structured, and completed in the report sections or section data tables.
+2. Run a strict self-critique check: if any requested deliverable is omitted, left incomplete, or left as a placeholder, you must retrieve the facts from the raw vector findings and populate the missing details before finalizing the report. Do NOT use placeholder text or generic summaries for required deliverables.
+ 
+Present the final synthesis in structured JSON matching this exact schema:
 {{
     "title": "A compelling, professional title for the research report",
     "summary": "An executive summary (2-3 paragraphs, summarizing key trends, findings, and implications)",
     "sections": [
         {{
             "title": "Section Title (e.g., Market Overview, Competitor Pricing, Feature Analysis)",
-            "content": "Detailed analysis narrative text for this section (multiple paragraphs, professional tone). Include data and details.",
+            "content": "Detailed narrative text for this section (multiple paragraphs, professional tone). Include data and details.",
             "data": [
                 {{"column1": "val1", "column2": "val2"}}
             ], // Optional: Tabular structured data if this section contains comparison metrics, pricing, features, etc. Set to null if no tabular data.
@@ -555,7 +567,7 @@ Analyze and combine these findings. Resolve conflicts where possible. Present th
         {{"url": "source_url", "title": "Source Title", "quality_score": 95, "tier_label": "Tier 1"}}
     ] // Combine and deduplicate sources from the vectors_data. Provide URL, title, quality_score, and tier_label.
 }}
-
+ 
 Return ONLY valid JSON. Do not include markdown code blocks or explanations."""
 
     try:
@@ -629,79 +641,48 @@ Return ONLY valid JSON. Do not include markdown code blocks or explanations."""
         }
 
 
-def synthesize_research_stream(vectors_data: list[dict], original_query: str, format_hint: str = '', output_folder: str = '', vectors: list[dict] = None):
+def synthesize_research_stream(vectors_data: list[dict], original_query: str, format_hint: str = '', output_folder: str = '', vectors: list[dict] = None, instruction: str = '', required_deliverables: list = None):
     """
     Generator version of synthesize_research. Yields chunks of generated text (str).
     After the generation completes, yields a dict representing the parsed JSON result.
-    Synthesizes section-by-section from disk payloads or fallback vectors_data.
+    Synthesizes section-by-section based on blueprint sections and their content types.
     """
     if not _clients:
         yield {"success": False, "error": "Gemini not configured."}
         return
         
-    # Resolve vectors list
-    if not vectors and output_folder:
-        config_path = os.path.join(output_folder, "run_config.json")
-        if os.path.exists(config_path):
+    # Load blueprint
+    blueprint = {}
+    if output_folder:
+        blueprint_path = os.path.join(output_folder, "blueprint.json")
+        if os.path.exists(blueprint_path):
             try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                    vectors = config.get("vectors")
+                with open(blueprint_path, "r", encoding="utf-8") as f:
+                    blueprint = json.load(f)
             except Exception:
                 pass
                 
-    if not vectors and vectors_data:
-        vectors = [item.get("vector") for item in vectors_data if item.get("vector")]
-        
-    if not vectors:
-        yield {"success": False, "error": "No research vectors found for synthesis."}
+    if not blueprint or not blueprint.get("sections"):
+        yield {"success": False, "error": "Blueprint is missing. Cannot synthesize report."}
         return
-        
-    # Load extracted payloads from disk
-    extracted_dir = os.path.join(output_folder, "extracted") if output_folder else None
-    extracted_payloads = {}
-    if extracted_dir and os.path.exists(extracted_dir):
-        for f_name in os.listdir(extracted_dir):
+
+    # Load draft heading payloads from drafts/ directory
+    drafts_dir = os.path.join(output_folder, "drafts") if output_folder else None
+    draft_payloads = {}
+    if drafts_dir and os.path.exists(drafts_dir):
+        for f_name in os.listdir(drafts_dir):
             if f_name.endswith(".json"):
-                v_id = f_name[:-5]
-                path = os.path.join(extracted_dir, f_name)
+                h_id = f_name[:-5]
+                path = os.path.join(drafts_dir, f_name)
                 try:
                     with open(path, "r", encoding="utf-8") as f:
-                        extracted_payloads[v_id] = json.load(f)
+                        draft_payloads[h_id] = json.load(f)
                 except Exception:
                     pass
-                    
-    # Fallback to vectors_data in-memory if disk is empty
-    if not extracted_payloads and vectors_data:
-        for item in vectors_data:
-            vector = item.get("vector") or {}
-            v_id = vector.get("id") or vector.get("topic")
-            if v_id:
-                # Classify status
-                import sys
-                from pathlib import Path
-                sys.path.append(str(Path(__file__).parent.parent))
-                from presentation_filter import classify_vector
-                
-                status_class = classify_vector(item)
-                if status_class == "RICH":
-                    status = "SUCCESS"
-                elif status_class == "PARTIAL":
-                    status = "LOW_COVERAGE"
-                else:
-                    status = "EMPTY"
-                    if not item.get("success") and "not applicable" in str(item.get("error", "")).lower():
-                        status = "NOT_APPLICABLE"
-                
-                extracted_payloads[v_id] = {
-                    "vector_id": v_id,
-                    "vector": vector,
-                    "data": item.get("data"),
-                    "sources": item.get("sources"),
-                    "success": item.get("success"),
-                    "error": item.get("error"),
-                    "status": status
-                }
+
+    # Resolve required deliverables
+    if not required_deliverables:
+        required_deliverables = blueprint.get("required_deliverables") or []
 
     # Clean/format report title programmatically
     def clean_report_title(t: str) -> str:
@@ -715,7 +696,7 @@ def synthesize_research_stream(vectors_data: list[dict], original_query: str, fo
             cleaned = cleaned[15:].strip()
         elif cleaned.lower().startswith("research report on "):
             cleaned = cleaned[19:].strip()
-
+        
         # Conversational prefixes
         cleaned = re.sub(
             r"^(give\s+me|tell\s+me|show\s+me|write\s+a|compare|detailed\s+guide\s+for|guide\s+for|search\s+for|find\s+out|everything\s+about|detailed\s+plan\s+for|road\s+map\s+for)\s+",
@@ -723,7 +704,6 @@ def synthesize_research_stream(vectors_data: list[dict], original_query: str, fo
             cleaned,
             flags=re.IGNORECASE
         )
-        # Conversational suffixes/notes
         cleaned = re.sub(
             r",?\s*(provide\s+me|relevaent|also\s+include|which\s+includes|etc\s+have|to\s+be\s+considered).*$",
             "",
@@ -759,21 +739,28 @@ def synthesize_research_stream(vectors_data: list[dict], original_query: str, fo
             return f"Research Report on {title_str}"
         return title_str
 
+    deliverables_text = ""
+    if required_deliverables:
+        deliverables_text = "\nCRITICAL USER REQUIREMENTS (MUST BE FULLY SATISFIED AND COMPLETED):\n" + "\n".join([f"- {item}" for item in required_deliverables])
+        
     # Generate the Title, Summary, and Takeaways
     header_prompt = f"""You are a senior research coordinator compiling a market research report.
 Original User Query: "{original_query}"
+Master Guidelines/Blueprint: "{instruction}"
 Format/Output Preference: "{format_hint}"
-
-Research Topics Covered:
-{json.dumps([v.get("topic") for v in vectors if v], indent=2)}
-
+{deliverables_text}
+ 
+Blueprint Sections:
+{json.dumps([{"id": s["id"], "heading": s["heading"]} for s in blueprint.get("sections", [])], indent=2)}
+ 
 Generate:
 1. A compelling, professional, and formal title for the research report.
    CRITICAL: The title must NOT be a copy of the user's query, and must NOT contain spelling mistakes, typos, or conversational language (like "give me", "show me", "tell me").
-   Make it sound like a publication-grade research paper or market study (e.g. "Comprehensive Learning Path and Career Guide for AI/ML and Coding" instead of "give me a detailes guide for a beginner who wnats to learn ai ml and coding").
+   Make it sound like a publication-grade research paper or market study (e.g. "Comprehensive Learning Path and Career Guide for AI/ML and Coding").
 2. A high-level Executive Summary (2-3 paragraphs, summarizing key trends, findings, and implications).
+   CRITICAL: The executive summary must explicitly highlight the resolution of all CRITICAL USER REQUIREMENTS and how those deliverables are addressed in this report.
 3. A list of 3-5 strategic Key Takeaways.
-
+ 
 Return your response in this exact JSON structure:
 {{
   "title": "...",
@@ -816,8 +803,8 @@ Return ONLY valid JSON. No markdown code blocks, no other text."""
     all_sources = []
     seen_urls = set()
     
-    # Collect all sources first for the Sources section at the end
-    for v_id, payload in extracted_payloads.items():
+    # Collect all sources first
+    for h_id, payload in draft_payloads.items():
         for s in (payload.get("sources") or []):
             url = s.get("url") or s.get("link")
             if url and url not in seen_urls:
@@ -829,99 +816,122 @@ Return ONLY valid JSON. No markdown code blocks, no other text."""
                     "tier_label": s.get("tier_label") or s.get("tier", s.get("label", "Tier 6"))
                 })
 
-    for idx, vector in enumerate(vectors, 1):
-        if not vector:
-            continue
-        v_id = vector.get("id") or vector.get("topic")
-        topic = vector.get("topic", "Sub-topic")
-        desc = vector.get("description", "")
-        
-        payload = extracted_payloads.get(v_id)
-        if not payload:
-            section_content = "*Insufficient data captured for this vector.*"
-            section_title = topic
-            section_obj = {
-                "title": section_title,
-                "content": section_content,
-                "data": None,
-                "key_findings": [],
-                "visualization_hint": "bullets"
-            }
-            sections.append(section_obj)
-            sec_md = f"## {idx}. {section_title}\n\n{section_content}\n\n"
-            yield sec_md
-            continue
-            
-        status = payload.get("status", "EMPTY")
-        
-        if status in ["EMPTY", "LOGIN_GATED"]:
-            section_content = "*Insufficient data captured for this vector.*"
-            section_title = topic
-            if status == "LOGIN_GATED":
-                section_content = "*Insufficient data captured for this vector (data is login-gated/quote-gated).*"
-            section_obj = {
-                "title": section_title,
-                "content": section_content,
-                "data": None,
-                "key_findings": [],
-                "visualization_hint": "bullets"
-            }
-            sections.append(section_obj)
-            sec_md = f"## {idx}. {section_title}\n\n{section_content}\n\n"
-            yield sec_md
-            continue
-            
-        if status == "NOT_APPLICABLE":
-            reason = payload.get("error", "Wrong entity/geography/scope")
-            section_content = f"*This section was excluded: {reason}*"
-            section_title = topic
-            section_obj = {
-                "title": section_title,
-                "content": section_content,
-                "data": None,
-                "key_findings": [],
-                "visualization_hint": "bullets"
-            }
-            sections.append(section_obj)
-            sec_md = f"## {idx}. {section_title}\n\n{section_content}\n\n"
-            yield sec_md
-            continue
-            
-        # Synthesize SUCCESS or LOW_COVERAGE vector section
-        section_prompt = f"""You are a market analyst writing a specific section of a research report.
-Original User Query: "{original_query}"
-Sub-topic (Vector): "{topic}"
-Description: "{desc}"
-Coverage Class: "{status}"
+    previous_sections_context = []
 
-Extracted Structured Data:
-{json.dumps(payload.get("data"), indent=2)}
+    for idx, sec in enumerate(blueprint.get("sections", []), 1):
+        sid = sec["id"]
+        heading = sec["heading"]
+        content_type = sec.get("content_type", "narrative")
+        instructions = sec.get("instructions", "")
+        
+        payload = draft_payloads.get(sid)
+        if not payload or not payload.get("success") or not payload.get("data"):
+            section_content = "*Insufficient data captured for this section.*"
+            section_obj = {
+                "title": heading,
+                "content": section_content,
+                "data": None,
+                "key_findings": [],
+                "visualization_hint": "bullets"
+            }
+            sections.append(section_obj)
+            sec_md = f"## {idx}. {heading}\n\n{section_content}\n\n"
+            yield sec_md
+            continue
+            
+        draft_data = payload["data"]
+        
+        # Scraped images
+        scraped_imgs = []
+        for src in payload.get("sources", []):
+            if isinstance(src, dict) and "images" in src:
+                scraped_imgs.extend(src["images"])
+                
+        images_context = ""
+        if scraped_imgs:
+            images_context = f"\nScraped webpage images that you can embed in your section using standard markdown `![alt](url)`:\n" + json.dumps(scraped_imgs, indent=2)
+
+        # Build prompt based on content type
+        content_type_prompt = ""
+        if content_type == "flowchart":
+            content_type_prompt = """The content of this section MUST primarily consist of a detailed Mermaid flowchart showing the process flow, payment workflow, or logic triggers.
+            Format the flowchart inside a markdown mermaid block:
+            ```mermaid
+            graph TD
+                A[Start] --> B[Step 1]
+            ```
+            Explain the flowchart steps briefly (1-2 sentences per step)."""
+        elif content_type == "narrative_with_flowchart":
+            content_type_prompt = """This section needs both a detailed narrative analysis (2-3 paragraphs) AND a Mermaid flowchart block showing the associated process/payment flow.
+            Format the flowchart inside a markdown mermaid block:
+            ```mermaid
+            graph TD
+                A[Start] --> B[Step 1]
+            ```"""
+        elif content_type == "comparison_table":
+            content_type_prompt = """The content of this section MUST contain a detailed markdown comparison table comparing the platforms/competitors/features.
+            Format the table in markdown:
+            | Parameter | Platform A | Platform B |
+            |---|---|---|"""
+        elif content_type == "timeline":
+            content_type_prompt = """The content of this section MUST contain a chronological timeline or rollout milestones roadmap.
+            Use a Mermaid timeline or gantt chart block if appropriate, or a detailed numbered list with milestones.
+            Format the timeline inside a markdown mermaid block if using mermaid:
+            ```mermaid
+            gantt
+                title Integration Roadmap
+            ```"""
+        elif content_type == "data_matrix":
+            content_type_prompt = """This section must include a detailed data parameter matrix (a structured comparison table showing specific pricing rates, commissions, API limits, or compliance limits)."""
+        else:
+            content_type_prompt = """Write a rich, detailed, professional narrative analysis (3-5 paragraphs) supported by bulleted details."""
+
+        # Enforce Anti-Repetition
+        anti_repetition_context = ""
+        if previous_sections_context:
+            anti_repetition_context = "\nALREADY COVERED in previous sections (DO NOT REPEAT or duplicate these points):\n" + "\n".join([f"- {item['title']}: {item['summary']}" for item in previous_sections_context])
+
+        section_prompt = f"""You are a master market analyst writing a specific section of a market research report.
+Original User Query: "{original_query}"
+Report Section Title: "{heading}"
+Expected Format/Content Type: "{content_type}"
+Section instructions: "{instructions}"
+{deliverables_text}
+{content_type_prompt}
+{anti_repetition_context}
+
+Master Expanded Research Prompt & Verbatim Answers Transcript (CRITICAL INSTRUCTIONS & CONSTRAINTS):
+{instruction}
+
+Extracted Factual Data from Sources:
+{json.dumps(draft_data, indent=2)}
 
 Sources used:
 {json.dumps(payload.get("sources"), indent=2)}
+{images_context}
 
-Your task is to write a detailed, professional section for this sub-topic.
 RULES:
-1. Write a professional, comprehensive narrative analysis (2-4 paragraphs). Use the extracted data.
-2. Since the Coverage Class is "{status}", if it is "LOW_COVERAGE", you MUST explicitly include a warning "⚠️ low coverage" in your content, present only verified facts, and never fabricate.
-3. Grounding rule: Claims sourced from model/grounding (not a verified scrape) must be attributed (e.g. "according to grounding results" / "per sources"), not asserted.
+1. Write a professional, comprehensive, and highly detailed section following the format guidelines. Use all available factual rates, parameters, and workflows.
+2. Under "content", provide the complete markdown content. If the content type requests a Mermaid chart or a comparison table, you MUST write the full Mermaid code block or markdown table directly inside the "content" string. Do not leave placeholders.
+3. If images are provided, embed the most relevant 1-2 images in the markdown content using standard markdown `![alt text](url)`.
 4. Output your response as a valid JSON object matching this schema:
 {{
-  "title": "Title of the section (e.g. '{topic}')",
-  "content": "Detailed narrative text for the section (multiple paragraphs, professional tone). Include data and details.",
+  "title": "Title of the section (e.g. '{heading}')",
+  "content": "Detailed markdown content for the section. Include narrative paragraphs, bullet lists, markdown tables, or Mermaid code blocks as requested.",
   "data": [
     {{"column1": "val1", "column2": "val2"}}
-  ], // Optional: Tabular structured data if this section contains comparison metrics, pricing, features, etc. Set to null if no tabular data.
+  ], // Optional: structured tabular data. Set to null if no tabular data.
   "key_findings": ["Key finding bullet 1", "Key finding bullet 2"],
-  "visualization_hint": "table|chart|flowchart|bullets"
+  "summary": "A 1-sentence summary of this section's core findings for anti-repetition context.",
+  "visualization_hint": "table|chart|flowchart|timeline|bullets"
 }}
-Return ONLY the valid JSON object. No explanations, no markdown blocks."""
+Return ONLY the valid JSON object. No explanations, no markdown fences outside the JSON."""
 
         try:
             response = _call_gemini(
                 contents=section_prompt,
-                tier="mid",
-                judgment=False,
+                tier="strong",
+                judgment=True,
                 config=types.GenerateContentConfig(
                     temperature=0.15,
                     response_mime_type="application/json"
@@ -929,7 +939,7 @@ Return ONLY the valid JSON object. No explanations, no markdown blocks."""
             )
             parsed = _parse_json_response(response.text)
             if parsed and isinstance(parsed, dict):
-                section_title = parsed.get("title", topic)
+                section_title = parsed.get("title", heading)
                 section_content = parsed.get("content", "")
                 section_data = parsed.get("data")
                 key_findings = parsed.get("key_findings", [])
@@ -944,38 +954,34 @@ Return ONLY the valid JSON object. No explanations, no markdown blocks."""
                 }
                 sections.append(section_obj)
                 
+                # Keep summary for anti-repetition context
+                previous_sections_context.append({
+                    "title": section_title,
+                    "summary": parsed.get("summary", heading)
+                })
+                
                 # Format section to markdown and stream
-                sec_md = f"## {idx}. {section_title}\n\n"
-                if status == "LOW_COVERAGE":
-                    sec_md += "> ⚠️ **low coverage**\n>\n"
-                sec_md += f"{section_content}\n\n"
+                sec_md = f"## {idx}. {section_title}\n\n{section_content}\n\n"
                 if key_findings:
                     sec_md += "### Key Findings\n"
                     for kf in key_findings:
                         sec_md += f"- {kf}\n"
                     sec_md += "\n"
-                if section_data:
-                    sec_md += "### Extracted Data\n```json\n" + json.dumps(section_data, indent=2) + "\n```\n\n"
                 yield sec_md
             else:
                 raise ValueError("Parsed result was not a dictionary")
         except Exception as e:
-            print(f"Failed to synthesize section for {topic}: {e}")
-            section_content = ""
+            print(f"Failed to synthesize section for {heading}: {e}")
+            section_content = "*AI synthesis failed for this section. Direct extraction output shown.*"
             section_obj = {
-                "title": topic,
-                "content": "",
-                "data": payload.get("data") if payload else None,
+                "title": heading,
+                "content": section_content,
+                "data": draft_data,
                 "key_findings": [],
-                "visualization_hint": "table" if payload and payload.get("data") else "bullets",
-                "status": "LOW_COVERAGE" if payload and payload.get("data") else "EMPTY",
+                "visualization_hint": "table",
             }
             sections.append(section_obj)
-
-            if payload and payload.get("data"):
-                yield f"## {idx}. {topic}\n\n> ⚠️ AI synthesis failed; using extracted structured data in presenter.\n\n"
-            else:
-                yield f"## {idx}. {topic}\n\n> Insufficient usable data captured for this section.\n\n"
+            yield f"## {idx}. {heading}\n\n{section_content}\n\n"
 
     # Yield sources list at the end
     sources_md = "## Sources & References\n"
@@ -1060,7 +1066,7 @@ Return ONLY valid JSON. No markdown code blocks, no explanations."""
         }
 
 
-def refine_synthesis(existing_synthesis: dict, refinement_instruction: str) -> dict:
+def refine_synthesis(existing_synthesis: dict, refinement_instruction: str, original_query: str = "", refined_prompt: str = "") -> dict:
     """
     Refines the existing synthesized research findings based on user feedback/refinement instruction.
     Uses Gemini to modify the JSON structure without re-scraping or re-researching.
@@ -1072,6 +1078,8 @@ def refine_synthesis(existing_synthesis: dict, refinement_instruction: str) -> d
 You have previously synthesized a research report into a structured JSON format.
 The user now has some feedback or wants to make changes/improvements to this report.
 
+Original User Query: "{original_query}"
+Master Guidelines/Blueprint: "{refined_prompt}"
 Refinement Feedback/Instruction: "{refinement_instruction}"
 
 Existing Report JSON:

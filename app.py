@@ -59,6 +59,27 @@ def _load_api_keys():
     return ",".join(unique_keys)
 
 API_KEY = _load_api_keys()
+_last_keys_mtime = 0
+_keys_file_path = os.path.join(os.path.dirname(__file__), "api_keys.txt")
+if os.path.exists(_keys_file_path):
+    try:
+        _last_keys_mtime = os.path.getmtime(_keys_file_path)
+    except Exception:
+        pass
+
+def reload_keys_if_changed():
+    global _last_keys_mtime, API_KEY
+    if os.path.exists(_keys_file_path):
+        try:
+            mtime = os.path.getmtime(_keys_file_path)
+            if mtime > _last_keys_mtime:
+                _last_keys_mtime = mtime
+                API_KEY = _load_api_keys()
+                extractor.configure(API_KEY)
+                print(f"[*] Dynamically reloaded {extractor.get_key_count()} API keys from api_keys.txt")
+        except Exception as e:
+            print(f"[!] Error dynamically reloading API keys: {e}")
+
 if not API_KEY:
     print("[!] Warning: No keys found in api_keys.txt or environment variables. Web server will start, but you must add your key in the settings modal in the UI to run research.")
     API_KEY = ""
@@ -123,6 +144,7 @@ def _state_payload(session_id, status, completed_vector_ids, vectors, **extra):
 
 def _get_key_rotation_status():
     try:
+        reload_keys_if_changed()
         import time
         from engine import extractor
         cells = []
@@ -223,6 +245,7 @@ def api_config():
     if data.get("youtube_key"):
         global YOUTUBE_KEY
         YOUTUBE_KEY = data["youtube_key"]
+        os.environ["YOUTUBE_API_KEY"] = YOUTUBE_KEY
         updated.append("YouTube API key set")
     if updated:
         return jsonify({
@@ -610,6 +633,7 @@ def api_history_delete(result_id):
 @app.route("/api/research/plan", methods=["POST"])
 def api_research_session_plan():
     """Stage 1: Analyze raw query and generate clarifying questions."""
+    reload_keys_if_changed()
     data = request.json or {}
     query = data.get("query", "").strip()
     context = data.get("context", "").strip()
@@ -771,7 +795,9 @@ def api_research_session_refine():
             research_vectors=res.get("vectors", []),
             output_format=output_format,
             depth=res.get("depth", "standard"),
-            effort_estimate=res.get("effort_estimate", {})
+            effort_estimate=res.get("effort_estimate", {}),
+            target_authority_domains=res.get("target_authority_domains", []),
+            required_deliverables=res.get("required_deliverables", [])
         )
         updated_session = get_session(session_id)
         output_folder = session_output.ensure_session_folder(
@@ -792,7 +818,8 @@ def api_research_session_refine():
                 "refined_prompt": updated_session.get("refined_prompt", ""),
                 "original_query": updated_session.get("original_query", ""),
                 "depth": updated_session.get("depth", "standard"),
-                "output_folder": output_folder
+                "output_folder": output_folder,
+                "target_authority_domains": updated_session.get("target_authority_domains", [])
             }
         )
         discovery_tasks[session_id] = thread
@@ -808,6 +835,26 @@ def api_research_session_refine():
             "suggested_data_points": res.get("suggested_data_points"),
             "quality_notes": res.get("quality_notes")
         })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/research/save_prompt", methods=["POST"])
+def api_research_save_prompt():
+    data = request.json or {}
+    session_id = data.get("session_id")
+    refined_prompt = data.get("refined_prompt", "").strip()
+    
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id is required"}), 400
+        
+    session = get_session(session_id)
+    if not session:
+        return jsonify({"success": False, "error": "Session not found"}), 404
+        
+    try:
+        update_session_status(session_id, session.get("status", "ready"), refined_prompt=refined_prompt)
+        return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -875,228 +922,192 @@ def api_research_session_stream(session_id):
                     seen_source_urls.add(url)
                 all_sources.append(s)
 
-        remaining_count = len([v for v in vectors if v.get("id") not in completed_vector_ids])
-        
-        # Initialize state.json cursor
-        state_payload = _state_payload(
-            session_id, "researching", completed_vector_ids, vectors
-        )
-        session_output.write_state(output_folder, state_payload)
+        # 1. Load or generate blueprint
+        blueprint = session_output.load_blueprint(output_folder)
+        if not blueprint or not blueprint.get("sections"):
+            # fallback/generate
+            yield _sse_event("status", {
+                "message": "Generating missing blueprint...",
+                "step": 0, "total": len(vectors) + 2,
+                "session_id": session_id,
+            })
+            answers = session.get("clarification_answers") or []
+            from engine import discoverer
+            blueprint = discoverer.generate_blueprint(original_query, session.get("refined_prompt", ""), vectors, answers)
+            session_output.write_blueprint(output_folder, blueprint)
 
+        # 2. Instantiate SourcePool and populate from scrape_queue.json
+        from engine.source_pool import SourcePool
+        from engine.deep_extractor import scrape_and_extract_for_pool, extract_for_heading
+        
+        pool = SourcePool(blueprint, output_folder)
+        queue_path = os.path.join(output_folder, "scrape_queue.json")
+        if os.path.exists(queue_path):
+            try:
+                with open(queue_path, "r", encoding="utf-8") as f:
+                    queue_sources = json.load(f)
+                for s in queue_sources:
+                    pool.add_source(
+                        url=s["url"],
+                        title=s.get("title", ""),
+                        snippet=s.get("snippet", ""),
+                        score=s.get("score", 50),
+                        source_type=s.get("source_type", "web"),
+                        relevant_heading_ids=s.get("relevant_heading_ids", []),
+                        vector_id=s.get("vector_id", "")
+                    )
+            except Exception as e:
+                print(f"Failed to populate SourcePool: {e}")
+
+        # 3. Load existing drafts for resuming
+        drafts = session_output.load_heading_drafts(output_folder)
+        completed_section_ids = set(drafts.keys())
+        
+        # Determine which headings are already satisfied
+        for sid, draft_data in drafts.items():
+            # mock populate scraped data in pool to satisfy heading status
+            pool.heading_data[sid] = [{"content": "resumed draft content", "source": {"url": "resumed"}, "url": "resumed"}]
+            
         yield _sse_event("status", {
-            "message": f"Starting research for {remaining_count} remaining vectors...",
+            "message": f"Source pool initialized with {len(pool.seen_urls)} unique URLs. Scraping sources...",
             "step": 0, "total": len(vectors) + 2,
             "session_id": session_id,
-            "output_folder": output_folder,
-            "resuming": len(completed_vector_ids) > 0,
-            "source_count": len(all_sources),
+            "source_count": 0,
             "active_rotation_cells": _get_key_rotation_status()
         })
-        
-        update_session_status(
-            session_id,
-            "researching",
-            output_folder=output_folder,
-            vector_results=all_vector_results,
-            sources_used=all_sources
-        )
-        
-        vectors_to_research = []
-        for i, vector in enumerate(vectors):
-            if vector.get("id") in completed_vector_ids:
-                prior = next((r for r in all_vector_results if (r.get("vector") or {}).get("id") == vector.get("id")), None)
-                yield _sse_event("vector_done", {
-                    "vector": vector,
-                    "step": i + 1,
-                    "total": len(vectors) + 2,
-                    "result": prior,
-                    "resumed": True,
-                    "source_count": len(all_sources),
-                    "active_rotation_cells": _get_key_rotation_status()
-                })
-            else:
-                vectors_to_research.append((i, vector))
 
-        if vectors_to_research:
-            msg_queue = queue.Queue()
-            
-            def run_single_vector(idx, vec):
-                v_topic = vec.get("topic", "Sub-topic")
-                
-                def progress_callback(msg):
-                    msg_queue.put({
-                        "type": "progress",
-                        "idx": idx,
-                        "vector": vec,
-                        "message": f"[{v_topic}] {msg}"
-                    })
-                
-                from engine.extractor import GeminiRateLimitError
-                max_vector_retries = 3
-                for v_attempt in range(max_vector_retries):
-                    try:
-                        depth = session.get("depth", "standard")
-                        max_scrape = 5 if depth == "surface" else (10 if depth == "standard" else 20)
-                        res = deep_research_vector(
-                            vector=vec,
-                            research_context=original_query,
-                            instruction=session.get("refined_prompt", ""),
-                            max_scrape=max_scrape,
-                            progress_cb=progress_callback,
-                            output_folder=output_folder,
-                            depth=depth
-                        )
-                        msg_queue.put({
-                            "type": "done",
-                            "idx": idx,
-                            "vector": vec,
-                            "result": res,
-                            "success": True
-                        })
-                        return res
-                    except GeminiRateLimitError as rate_err:
-                        cooldown = getattr(rate_err, "cooldown_sec", 30.0)
-                        msg_queue.put({
-                            "type": "status",
-                            "idx": idx,
-                            "message": f"Rate limit hit. Waiting {cooldown:.1f}s before retry...",
-                            "cooldown": cooldown
-                        })
-                        import time
-                        time.sleep(cooldown)
-                    except Exception as e:
-                        msg_queue.put({
-                            "type": "done",
-                            "idx": idx,
-                            "vector": vec,
-                            "success": False,
-                            "error": str(e)
-                        })
-                        return {
-                            "vector": vec,
-                            "data": {"error": str(e)},
-                            "sources": [],
-                            "success": False
-                        }
-                
-                err_msg = "Gemini API rate limits exhausted after multiple retries."
-                msg_queue.put({
-                    "type": "done",
-                    "idx": idx,
-                    "vector": vec,
-                    "success": False,
-                    "error": err_msg
-                })
-                return {
-                    "vector": vec,
-                    "data": {"error": err_msg},
-                    "sources": [],
-                    "success": False
-                }
+        # 4. Run async scraper pool if there are hungry headings
+        import queue
+        msg_queue = queue.Queue()
+        
+        def run_scraping():
+            def progress_callback(msg):
+                msg_queue.put({"type": "progress", "message": msg})
+            try:
+                scrape_and_extract_for_pool(
+                    pool=pool,
+                    max_workers=3,
+                    progress_cb=progress_callback,
+                    depth=session.get("depth", "standard")
+                )
+                msg_queue.put({"type": "done", "success": True})
+            except Exception as e:
+                msg_queue.put({"type": "done", "success": False, "error": str(e)})
 
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-            futures = [executor.submit(run_single_vector, idx, vec) for idx, vec in vectors_to_research]
-            
-            completed_count = 0
-            total_to_do = len(vectors_to_research)
-            
-            while completed_count < total_to_do:
-                try:
-                    event = msg_queue.get(timeout=0.1)
-                except queue.Empty:
-                    continue
-                
-                e_type = event["type"]
-                if e_type == "progress":
+        import threading
+        scraping_thread = threading.Thread(target=run_scraping)
+        scraping_thread.start()
+
+        # Handle progress messages from scraping
+        while scraping_thread.is_alive():
+            try:
+                event = msg_queue.get(timeout=0.1)
+                if event["type"] == "progress":
                     yield _sse_event("progress", {
                         "message": event["message"],
-                        "step": event["idx"] + 1,
+                        "step": 1,
                         "total": len(vectors) + 2,
-                        "vector": event["vector"],
-                        "source_count": len(all_sources),
+                        "source_count": len(pool.scraped_cache),
                         "active_rotation_cells": _get_key_rotation_status()
                     })
-                elif e_type == "status":
-                    yield _sse_event("status", {
+            except queue.Empty:
+                continue
+
+        # Drain any remaining queue items
+        while not msg_queue.empty():
+            try:
+                event = msg_queue.get_nowait()
+                if event["type"] == "progress":
+                    yield _sse_event("progress", {
                         "message": event["message"],
-                        "step": event["idx"] + 1,
+                        "step": 1,
                         "total": len(vectors) + 2,
-                        "session_id": session_id,
+                        "source_count": len(pool.scraped_cache),
                         "active_rotation_cells": _get_key_rotation_status()
                     })
-                elif e_type == "done":
-                    completed_count += 1
-                    idx = event["idx"]
-                    vec = event["vector"]
+            except queue.Empty:
+                break
+
+        # Save sources ledger
+        all_sources = []
+        for item in pool.queue:
+            all_sources.append(item[2])
+        for url, content in pool.scraped_cache.items():
+            for s in all_sources:
+                if s["url"] == url:
+                    s["scraped"] = True
+                    s["had_data"] = True
+                    s["status"] = "SUCCESS"
+        session_output.write_sources_ledger(output_folder, all_sources)
+
+        # 5. Concurrent section extraction
+        yield _sse_event("status", {
+            "message": "Scraping complete. Extracting facts section-by-section...",
+            "step": 2, "total": len(vectors) + 2,
+            "session_id": session_id,
+            "source_count": len(pool.scraped_cache),
+            "active_rotation_cells": _get_key_rotation_status()
+        })
+
+        sections = blueprint.get("sections", [])
+        section_results = {}
+        all_vector_results = []  # compatibility list
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as extractor_executor:
+            futures = {}
+            for sec in sections:
+                sid = sec["id"]
+                if sid in completed_section_ids:
+                    section_results[sid] = drafts[sid]
+                    continue
+                # Get heading content from pool
+                heading_content = pool.heading_data.get(sid, [])
+                fut = extractor_executor.submit(
+                    extract_for_heading, sec, heading_content, original_query
+                )
+                futures[fut] = sec
+                
+            for fut in concurrent.futures.as_completed(futures.keys() if futures else []):
+                sec = futures[fut]
+                sid = sec["id"]
+                try:
+                    res = fut.result()
+                    section_results[sid] = res
+                    # Save draft
+                    session_output.write_heading_draft(output_folder, sid, res)
                     
-                    if event["success"]:
-                        res = event["result"]
-                    else:
-                        error_msg = event.get("error", "Unknown error")
-                        res = {
-                            "vector": vec,
-                            "data": {"error": error_msg},
-                            "sources": [],
-                            "success": False
-                        }
-                        try:
-                            session_output.append_failure(
-                                folder=output_folder,
-                                target=vec.get("topic", "Sub-topic"),
-                                tier="TIER_5",
-                                error=error_msg,
-                                action_taken="Mark vector as failed"
-                            )
-                        except Exception as log_err:
-                            print(f"Failed to log vector failure: {log_err}")
+                    # Yield progress
+                    yield _sse_event("progress", {
+                        "message": f"Extracted data for: {sec['heading']}",
+                        "step": 2,
+                        "total": len(vectors) + 2,
+                        "source_count": len(pool.scraped_cache),
+                        "active_rotation_cells": _get_key_rotation_status()
+                    })
+                    
+                    # Map back to vector_done for frontend satisfaction
+                    for v_id in sec.get("mapped_vector_ids", []):
+                        vec_obj = next((v for v in vectors if v["id"] == v_id), None)
+                        if vec_obj:
+                            dummy_res = {
+                                "vector": vec_obj,
+                                "data": res.get("data"),
+                                "sources": res.get("sources", []),
+                                "success": True,
+                                "pages_scraped": len(res.get("sources", []))
+                            }
+                            all_vector_results.append(dummy_res)
                             
-                    all_vector_results.append(res)
-                    for s in res.get("sources") or []:
-                        url = s.get("url") or s.get("link")
-                        if url and url in seen_source_urls:
-                            continue
-                        if url:
-                            seen_source_urls.add(url)
-                        all_sources.append(s)
-                        
-                    try:
-                        session_output.append_raw_vector(output_folder, vec, res)
-                        session_output.write_partial_final(output_folder, session, all_vector_results)
-                        session_output.write_sources_ledger(output_folder, all_sources)
-                    except Exception as e:
-                        print(f"Failed to write partial output for {vec.get('topic')}: {e}")
-                        
-                    completed_vector_ids.add(vec.get("id"))
-                    state_payload = _state_payload(
-                        session_id, "researching", completed_vector_ids, vectors
-                    )
-                    session_output.write_state(output_folder, state_payload)
-                    
-                    update_session_status(
-                        session_id,
-                        "researching",
-                        output_folder=output_folder,
-                        vector_results=all_vector_results,
-                        sources_used=all_sources,
-                        result_data={
-                            "success": False,
-                            "partial": True,
-                            "message": "Research is in progress or can be resumed.",
-                            "vectors_completed": len([r for r in all_vector_results if r.get("success")]),
-                            "vectors_total": len(vectors),
-                            "output_folder": output_folder
-                        }
-                    )
-                    
-                    yield _sse_event("vector_done", {
-                        "vector": vec,
-                        "step": idx + 1,
-                        "total": len(vectors) + 2,
-                        "result": res,
-                        "source_count": len(all_sources),
-                        "active_rotation_cells": _get_key_rotation_status()
-                    })
-            executor.shutdown(wait=True)
+                            yield _sse_event("vector_done", {
+                                "vector": vec_obj,
+                                "step": 2,
+                                "total": len(vectors) + 2,
+                                "result": dummy_res,
+                                "source_count": len(pool.scraped_cache),
+                                "active_rotation_cells": _get_key_rotation_status()
+                            })
+                except Exception as e:
+                    print(f"Extraction failed for section {sec['heading']}: {e}")
                  # Step 2: Synthesis (First Pass)
         yield _sse_event("progress", {
             "message": "Synthesizing first-pass report (v1)...",
@@ -1105,17 +1116,18 @@ def api_research_session_stream(session_id):
             "active_rotation_cells": _get_key_rotation_status()
         })
         
-        synthesis = None
         synthesis_stream = extractor.synthesize_research_stream(
             vectors_data=all_vector_results,
             original_query=original_query,
             format_hint=output_format,
             output_folder=output_folder,
-            vectors=vectors
+            vectors=vectors,
+            instruction=session.get("refined_prompt", ""),
+            required_deliverables=session.get("required_deliverables", [])
         )
         
-        # Clear out final_report_v1.md so we can append cleanly
-        v1_path = os.path.join(output_folder, "final_report_v1.md")
+        # Clear out final_report_v1.txt so we can append cleanly
+        v1_path = os.path.join(output_folder, "final_report_v1.txt")
         try:
             if os.path.exists(v1_path):
                 os.remove(v1_path)
@@ -1221,7 +1233,7 @@ def api_research_session_stream(session_id):
             })
             return
 
-        # Write final synthesis v1 to final_report.md
+        # Write final synthesis v1 to final_report.txt
         if isinstance(synthesis, dict):
             session_output.write_final_synthesis(output_folder, synthesis, version="v1")
 
@@ -1348,10 +1360,12 @@ def api_research_session_stream(session_id):
                 original_query=original_query,
                 format_hint=output_format,
                 output_folder=output_folder,
-                vectors=vectors
+                vectors=vectors,
+                instruction=session.get("refined_prompt", ""),
+                required_deliverables=session.get("required_deliverables", [])
             )
             
-            v2_path = os.path.join(output_folder, "final_report_v2.md")
+            v2_path = os.path.join(output_folder, "final_report_v2.txt")
             try:
                 if os.path.exists(v2_path):
                     os.remove(v2_path)
@@ -1396,7 +1410,7 @@ def api_research_session_stream(session_id):
             output_file_path = run_presenter_for_session(output_folder, output_format)
         except Exception as e:
             print(f"Error running presenter: {e}")
-            output_file_path = os.path.join(output_folder, "partial_report.md")
+            output_file_path = os.path.join(output_folder, "partial_report.txt")
             
         actual_work = {
             "sources_to_discover": len(all_sources),
@@ -1530,6 +1544,7 @@ def api_research_refine_result():
     Refines the final result of a research session based on user comments/feedback
     without re-scraping the web.
     """
+    reload_keys_if_changed()
     data = request.json or {}
     session_id = data.get("session_id")
     refinement_instruction = data.get("refinement_instruction", "").strip()
@@ -1550,7 +1565,12 @@ def api_research_refine_result():
         
     try:
         # Refine the synthesis JSON
-        refined_synthesis = extractor.refine_synthesis(existing_synthesis, refinement_instruction)
+        refined_synthesis = extractor.refine_synthesis(
+            existing_synthesis,
+            refinement_instruction,
+            original_query=session.get("original_query", ""),
+            refined_prompt=session.get("refined_prompt", "")
+        )
         
         if not refined_synthesis.get("success", True):
             return jsonify({"success": False, "error": refined_synthesis.get("error", "Refinement failed.")})

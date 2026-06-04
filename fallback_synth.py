@@ -16,7 +16,7 @@ Reads (input contract, Synthesis.md Â§1):
     run_<id>/sources.json                 # (optional) per-vector sources
 
 Writes:
-    run_<id>/final_report_fallback.md     # never overwrites v1/v2
+    run_<id>/final_report_fallback.txt     # never overwrites v1/v2
     run_<id>/state.json                   # updated with fallback flags (Â§7.6)
 """
 
@@ -279,7 +279,7 @@ def main():
     report, completed, total, upgradeable = build_report(run_dir, chosen, state)
 
     # never overwrite v1/v2 â€” write our own filename only
-    out_path = os.path.join(run_dir, "final_report_fallback.md")
+    out_path = os.path.join(run_dir, "final_report_fallback.txt")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(report)
 

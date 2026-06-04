@@ -8,6 +8,8 @@ It may render only:
 * useful extracted rows;
 * useful synthesized prose;
 * compact coverage gaps;
+* **visual assets**: inlined screenshot charts, maps, or diagrams (`visual_extraction` from `/assets`) with brief figure captions;
+* **conflict interventions**: human-in-the-loop overrides widgets (on the web interface) or inline notes detailing user choices;
 * one clean deduplicated source list.
 
 It must never render:

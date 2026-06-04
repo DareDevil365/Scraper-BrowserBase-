@@ -6,11 +6,11 @@ import subprocess
 session_dir = "outputs/make_a_detailed_excel_that_have_list_of_most_useful_free_ai__20260530105341_6f860882"
 state_path = os.path.join(session_dir, "state.json")
 state_bak = os.path.join(session_dir, "state.json.bak")
-v1_path = os.path.join(session_dir, "final_report_v1.md")
-v1_bak = os.path.join(session_dir, "final_report_v1.md.bak")
+v1_path = os.path.join(session_dir, "final_report_v1.txt")
+v1_bak = os.path.join(session_dir, "final_report_v1.txt.bak")
 
-# 1. Back up original state.json and final_report_v1.md
-print("Backing up state.json and final_report_v1.md...")
+# 1. Back up original state.json and final_report_v1.txt
+print("Backing up state.json and final_report_v1.txt...")
 shutil.copy2(state_path, state_bak)
 if os.path.exists(v1_path):
     shutil.copy2(v1_path, v1_bak)
@@ -75,7 +75,7 @@ subprocess.run(["python", "present.py", session_dir, "--formats", "docx,html"], 
 print("Overwriting report1.docx in workspace root...")
 shutil.copy2(os.path.join(session_dir, "report.docx"), "report1.docx")
 
-# 6. Restore original state.json and final_report_v1.md
+# 6. Restore original state.json and final_report_v1.txt
 print("Restoring backups...")
 if os.path.exists(state_bak):
     if os.path.exists(state_path):

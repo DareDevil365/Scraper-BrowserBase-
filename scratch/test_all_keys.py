@@ -16,15 +16,19 @@ def load_keys():
 keys = load_keys()
 print(f"Loaded {len(keys)} keys from api_keys.txt")
 
+models_to_test = ["gemini-2.0-flash", "gemini-2.5-flash-lite"]
+
 for idx, key in enumerate(keys, 1):
     print(f"\n--- Testing Key #{idx}: {key[:10]}...{key[-5:]} ---")
-    try:
-        client = genai.Client(api_key=key)
-        # Try a simple quick model call
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents="say Hello"
-        )
-        print(f"Success! Response: {response.text.strip()}")
-    except Exception as e:
-        print(f"Failed: {e}")
+    for model in models_to_test:
+        try:
+            client = genai.Client(api_key=key)
+            response = client.models.generate_content(
+                model=model,
+                contents="say Hello"
+            )
+            print(f"[{model}] Success! Response: {response.text.strip()}")
+            break # If one model succeeds, go to next key
+        except Exception as e:
+            print(f"[{model}] Failed: {e}")
+

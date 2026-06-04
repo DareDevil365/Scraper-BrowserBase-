@@ -35,7 +35,11 @@ so that if Stage 3 is cut short, the highest-value sources were already done.
    scope terms so search returns specific pages, not top-level homepages
    (*e.g.* include the specific product/event/organization + the facet sought,
    not just the bare topic word).
-4. Scale fan-out by `depth`: surface ≈ 3–5 queries/vector; deep ≈ 20+ (mirrors core §3.2).
+4. **Dynamic Query Translation (Multilingual Fanning)**:
+   - **Identify Target Geographies**: If the scope or entity is tied to a non-English country (e.g. European regulations, Asian manufacturing), translate the scoped queries into the target region's dominant language (e.g. German, Japanese, Chinese) using a cheap-tier LLM call.
+   - **Cross-Lingual Search**: Execute queries in both English and the native translation to capture TIER_1 and TIER_2 primary sources that are not indexable under English keywords.
+   - **Unified Extraction**: Extracted page text is passed to Gemini, which reads the foreign language source and translates the facts back to English during structural extraction.
+5. Scale fan-out by `depth`: surface ≈ 3–5 queries/vector; deep ≈ 20+ (mirrors core §3.2).
 
 ---
 
@@ -65,6 +69,15 @@ Assign each source a tier + numeric `authority_score`. Suggested ladder
 
 > A high authority tier does **not** override the §4.3/§5 scope gate: an official
 > homepage that isn't the resolved entity is still `NOT_APPLICABLE`.
+
+### 3.1.1 Context-Aware Domain Boosting (Intent-Based Re-tiering)
+- **Identify Intent Context**: Read the intent classified by `classify_intent` (e.g. `market`, `policy`, `sentiment`, `general`).
+- **Dynamic Re-tiering Rules**:
+  - **sentiment intent**: Elevate community networks, product forums, and social sites (e.g., Reddit, StackOverflow, Quora) from TIER_6 to **TIER_2**. Demote consultancies to TIER_5.
+  - **policy intent**: Elevate government regulations portals (.gov, .org) and legal registries to **TIER_1**. Demote aggregators.
+  - **market intent**: Elevate financial filings (SEC), market trackers (Statista), and consultant reports (PwC, McKinsey) to **TIER_1**.
+  - **general/tool comparisons**: Elevate user-review aggregators (G2, TrustRadius, Capterra) from TIER_3 to **TIER_2**.
+- **Reasoning**: A domain is only as authoritative as its context. For customer complaints, Reddit is Tier 1; for rate sheets, the official carrier site is Tier 1.
 
 ### 3.2 Intent weighting (T2, batched — borderline only)
 - Clearly-relevant and clearly-irrelevant sources are decided by **code/cheap signals**.

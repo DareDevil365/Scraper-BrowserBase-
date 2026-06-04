@@ -188,6 +188,11 @@ Every failure is recorded to `failures.jsonl` (`url/task, tier, error, action_ta
 so partial fails never silently hinder the run, and a retry pass can target exactly
 what failed.
 
+### 4.6 Multimodal Visual Extraction & Grounding
+- **Visual Capture**: For pages containing visual data representations (charts, graphs, complex tables, maps) that cannot be parsed by text extractors, use Playwright to capture screenshot crops of these visual elements.
+- **Multimodal Prompting**: Pass these visual clips directly to multimodal Gemini models with structured questions: *"Extract the exact metrics, values, and trends displayed in this chart. Return as structured JSON."*
+- **Text Mapping**: Map these visual facts back to the corresponding sections, citing them in the sources list as `visual_extraction`.
+
 ---
 
 ## 5. Entity Validation (drift guard)
@@ -209,13 +214,16 @@ per-run data.
 
 ---
 
-## 6. Quota Behavior (no wall-clock pacing)
+## 6. Quota Behavior & Header Tracking
+
+### 6.1 Throttle on Cooldowns & Header Signals
 - **Throttle only on real cooldowns.** No `target_pace = calls / T_total`.
-- On `429`: sleep *only* the affected cell for *exactly* its reported cooldown,
-  rotate to the next available cell, keep working.
-- **Daily reset awareness:** if a worthwhile run exhausts daily quota across all keys
-  for a needed tier, **checkpoint and resume at the next reset** (§9) — the natural
-  multi-day path, triggered by work, not by a setting.
+- **Dynamic Header Parsing**: Read rate-limit headers (e.g., `x-ratelimit-remaining-tokens`, `x-ratelimit-remaining-requests`, `retry-after`) from responses. 
+- **Adaptive Concurrency Control**: Adjust active worker thread counts and request delays dynamically based on remaining tokens and requests. If remaining tokens fall below 15% of the burst limit, step down request rate to prevent hitting errors.
+- On `429`: Sleep *only* the affected cell for *exactly* its reported cooldown, rotate to the next available cell, keep working.
+
+### 6.2 Daily Reset Awareness
+- If a worthwhile run exhausts daily quota across all keys for a needed tier, **checkpoint and resume at the next reset** (§9) — the natural multi-day path, triggered by work, not by a setting.
 
 ---
 

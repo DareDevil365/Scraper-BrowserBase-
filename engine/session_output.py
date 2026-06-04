@@ -40,7 +40,8 @@ def write_run_config(folder: str, session: dict):
         "depth": session.get("depth", "standard"),
         "output_format": session.get("output_format", "pdf"),
         "effort_estimate": session.get("effort_estimate", {}),
-        "created_at": session.get("created_at", "")
+        "created_at": session.get("created_at", ""),
+        "clarification_answers": session.get("clarification_answers", [])
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, default=str)
@@ -50,7 +51,7 @@ def write_run_config(folder: str, session: dict):
 def write_search_parameters(folder: str, session: dict):
     write_run_config(folder, session)
     
-    path = os.path.join(folder, "01_search_parameters.md")
+    path = os.path.join(folder, "01_search_parameters.txt")
     answers = session.get("clarification_answers") or []
     vectors = session.get("research_vectors") or []
 
@@ -452,9 +453,9 @@ def render_value_as_markdown(value, depth=0) -> list[str]:
 
 
 def write_partial_final(folder: str, session: dict, vector_results: list[dict], error: str = ""):
-    legacy_path = os.path.join(folder, "03_final_analysis_output.md")
-    path = os.path.join(folder, "partial_report.md")
-    final_output_path = os.path.join(folder, "final_output.md")
+    legacy_path = os.path.join(folder, "03_final_analysis_output.txt")
+    path = os.path.join(folder, "partial_report.txt")
+    final_output_path = os.path.join(folder, "final_output.txt")
     
     completed = [v for v in vector_results if v.get("success")]
     failed = [v for v in vector_results if not v.get("success")]
@@ -511,12 +512,12 @@ def write_partial_final(folder: str, session: dict, vector_results: list[dict], 
 
 
 def write_final_synthesis(folder: str, synthesis: dict, version: str = "v1"):
-    legacy_path = os.path.join(folder, "03_final_analysis_output.md")
-    final_output_path = os.path.join(folder, "final_output.md")
+    legacy_path = os.path.join(folder, "03_final_analysis_output.txt")
+    final_output_path = os.path.join(folder, "final_output.txt")
     
     # Path for versioned report
-    v_path = os.path.join(folder, f"final_report_{version}.md")
-    latest_path = os.path.join(folder, "final_report.md")
+    v_path = os.path.join(folder, f"final_report_{version}.txt")
+    latest_path = os.path.join(folder, "final_report.txt")
     
     lines = [
         f"# {synthesis.get('title', 'Research Report')}",
@@ -559,3 +560,46 @@ def write_final_synthesis(folder: str, synthesis: dict, version: str = "v1"):
             print(f"Failed to write final synthesis to {p}: {e}")
             
     return latest_path
+
+
+def write_blueprint(folder: str, blueprint: dict):
+    path = os.path.join(folder, "blueprint.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(blueprint, f, indent=2, default=str)
+    return path
+
+
+def load_blueprint(folder: str) -> dict:
+    path = os.path.join(folder, "blueprint.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to load blueprint: {e}")
+    return {"sections": [], "presentation_rules": {}}
+
+
+def write_heading_draft(folder: str, heading_id: str, data: dict):
+    draft_dir = os.path.join(folder, "drafts")
+    os.makedirs(draft_dir, exist_ok=True)
+    path = os.path.join(draft_dir, f"{heading_id}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+    return path
+
+
+def load_heading_drafts(folder: str) -> dict:
+    drafts = {}
+    draft_dir = os.path.join(folder, "drafts")
+    if os.path.exists(draft_dir):
+        for f_name in os.listdir(draft_dir):
+            if f_name.endswith(".json"):
+                heading_id = f_name[:-5]
+                path = os.path.join(draft_dir, f_name)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        drafts[heading_id] = json.load(f)
+                except Exception as e:
+                    print(f"Failed to load draft {heading_id}: {e}")
+    return drafts

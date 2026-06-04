@@ -11,7 +11,7 @@ import requests
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
 from engine import extractor, session_output
-from .scraper_stealth import fetch_page, _run_async
+from .scraper import fetch_page, _run_async
 
 PERPLEXITY_API_KEY = ""
 PERPLEXITY_MODEL = "sonar"
@@ -21,12 +21,9 @@ PERPLEXITY_MODEL = "sonar"
 SOURCE_QUALITY_TIERS = {
     "TIER_1": {
         "score_range": (90, 100),
-        "name": "Tier 1: Consultancies, Research Firms & Academia",
+        "name": "Tier 1: High-Authority Primary Sources, Legal Regulators & Core Academic Databases",
         "domains": [
-            "mckinsey.com", "bcg.com", "bain.com", "deloitte.com", "pwc.com", "ey.com", "kpmg.com",
-            "accenture.com", "oliverwyman.com", "rolandberger.com", "gartner.com", "forrester.com",
-            "idc.com", "frost.com", "grandviewresearch.com", "mordorintelligence.com",
-            "marketsandmarkets.com", "scholar.google.com", "arxiv.org", "pubmed.ncbi.nlm.nih.gov",
+            "scholar.google.com", "arxiv.org", "pubmed.ncbi.nlm.nih.gov",
             "nature.com", "sciencedirect.com", "springer.com", "ieee.org", "acm.org", "brookings.edu",
             "rand.org", "nber.org", "weforum.org", "hbr.org"
         ],
@@ -34,7 +31,7 @@ SOURCE_QUALITY_TIERS = {
     },
     "TIER_2": {
         "score_range": (80, 89),
-        "name": "Tier 2: Government, Sector Bodies & Company-Own Sources",
+        "name": "Tier 2: Government Portals, Sectoral Bodies & Query-Specific Target Authorities",
         "domains": [
             "data.gov", "census.gov", "bls.gov", "sec.gov", "rbi.org.in", "sebi.gov.in", "worldbank.org",
             "imf.org", "who.int", "oecd.org", "nasscom.in", "iso.org", "nist.gov"
@@ -43,7 +40,7 @@ SOURCE_QUALITY_TIERS = {
     },
     "TIER_3": {
         "score_range": (70, 79),
-        "name": "Tier 3: Secondary Research & Data Aggregation",
+        "name": "Tier 3: Secondary Databases & Specialized Aggregators",
         "domains": [
             "statista.com", "ourworldindata.org", "tradingeconomics.com", "worldometers.info",
             "g2.com", "trustradius.com", "capterra.com", "crunchbase.com", "pitchbook.com",
@@ -53,7 +50,7 @@ SOURCE_QUALITY_TIERS = {
     },
     "TIER_4": {
         "score_range": (60, 69),
-        "name": "Tier 4: Research Libraries & Repositories",
+        "name": "Tier 4: Public Libraries & Documents Repositories",
         "domains": [
             "scribd.com", "academia.edu", "researchgate.net", "ssrn.com", "core.ac.uk",
             "slideshare.net", "issuu.com", "patents.google.com", "kaggle.com", "data.world",
@@ -62,7 +59,7 @@ SOURCE_QUALITY_TIERS = {
     },
     "TIER_5": {
         "score_range": (45, 59),
-        "name": "Tier 5: Quality Journalism & Expert Content",
+        "name": "Tier 5: Specialized Industry Publications & Expert Content",
         "domains": [
             "techcrunch.com", "arstechnica.com", "theverge.com", "wired.com", "ft.com",
             "economist.com", "wsj.com", "nytimes.com", "bbc.com", "cnbc.com"
@@ -212,7 +209,7 @@ def _detect_subject_owned_source(url: str, research_subject: str) -> bool:
             
     return False
 
-def score_source_quality(url: str, title: str, snippet: str, research_subject: str = "", intent: str = "general") -> dict:
+def score_source_quality(url: str, title: str, snippet: str, research_subject: str = "", intent: str = "general", target_authority_domains: list = None) -> dict:
     """Scores a URL 0-100 based on domain authority, TLDs, and keyword relevance."""
     url_lower = url.lower()
     title_lower = title.lower() if title else ""
@@ -225,28 +222,45 @@ def score_source_quality(url: str, title: str, snippet: str, research_subject: s
     domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url_lower)
     domain = domain_match.group(1) if domain_match else url_lower
     
-    base_score = 30
-    detected_tier = "TIER_6"
-    found_tier = False
+    # YouTube score boosting
+    if "youtube.com" in domain or "youtu.be" in domain:
+        base_score = 70
+        detected_tier = "TIER_3"
+        found_tier = True
+    else:
+        base_score = 30
+        detected_tier = "TIER_6"
+        found_tier = False
+
+    # Check dynamic target authority domains first
+    if target_authority_domains:
+        for t_domain in target_authority_domains:
+            t_domain_lower = t_domain.lower()
+            if t_domain_lower in domain or domain.endswith("." + t_domain_lower):
+                base_score = 95  # Dynamic Tier 1 Boost!
+                detected_tier = "TIER_1"
+                found_tier = True
+                break
     
-    for tier_key, tier_info in SOURCE_QUALITY_TIERS.items():
-        for d in tier_info.get("domains", []):
-            if d in domain or domain.endswith("." + d):
-                base_score = (tier_info["score_range"][0] + tier_info["score_range"][1]) // 2
-                detected_tier = tier_key
-                found_tier = True
+    if not found_tier:
+        for tier_key, tier_info in SOURCE_QUALITY_TIERS.items():
+            for d in tier_info.get("domains", []):
+                if d in domain or domain.endswith("." + d):
+                    base_score = (tier_info["score_range"][0] + tier_info["score_range"][1]) // 2
+                    detected_tier = tier_key
+                    found_tier = True
+                    break
+            if found_tier:
                 break
-        if found_tier:
-            break
-            
-        for pattern in tier_info.get("tld_patterns", []):
-            if domain.endswith(pattern):
-                base_score = (tier_info["score_range"][0] + tier_info["score_range"][1]) // 2
-                detected_tier = tier_key
-                found_tier = True
+                
+            for pattern in tier_info.get("tld_patterns", []):
+                if domain.endswith(pattern):
+                    base_score = (tier_info["score_range"][0] + tier_info["score_range"][1]) // 2
+                    detected_tier = tier_key
+                    found_tier = True
+                    break
+            if found_tier:
                 break
-        if found_tier:
-            break
             
     if research_subject and _detect_subject_owned_source(url, research_subject):
         base_score = max(base_score, 85)
@@ -259,7 +273,7 @@ def score_source_quality(url: str, title: str, snippet: str, research_subject: s
             detected_tier = "TIER_1"
             
     boost = 0
-    for pos_kw in ["report", "whitepaper", "data", "statistics", "analysis", "research", "study", "documentation", "guide", "pricing"]:
+    for pos_kw in ["report", "whitepaper", "data", "statistics", "analysis", "research", "study", "documentation", "guide", "pricing", "api", "webhook", "manual"]:
         if pos_kw in title_lower or pos_kw in snippet_lower:
             boost += 5
             
@@ -277,65 +291,73 @@ def score_source_quality(url: str, title: str, snippet: str, research_subject: s
             label = tier_info["name"]
             break
             
-    return {
+    res = {
         "score": final_score,
         "tier": detected_tier,
         "label": label
     }
+    if "youtube.com" in domain or "youtu.be" in domain:
+        res["source_type"] = "youtube"
+    return res
 
 # ── YouTube Integration ──────────────────────────────────────────────
 
 def discover_youtube_sources(query: str, max_results: int = 5) -> list[dict]:
-    """Use YouTube Data API v3 to search videos if API key is configured."""
+    """Use YouTube Data API v3 to search videos if API key is configured; otherwise fallback to browser scraper."""
     api_key = os.environ.get("YOUTUBE_API_KEY")
-    if not api_key:
-        return []
-    
-    try:
-        from googleapiclient.discovery import build
-        youtube = build("youtube", "v3", developerKey=api_key)
-        
-        request = youtube.search().list(
-            q=query,
-            part="snippet",
-            type="video",
-            maxResults=max_results
-        )
-        response = request.execute()
-        
-        video_ids = []
-        videos = []
-        for item in response.get("items", []):
-            vid_id = item.get("id", {}).get("videoId")
-            if vid_id:
-                video_ids.append(vid_id)
-                snippet = item.get("snippet", {})
-                videos.append({
-                    "url": f"https://www.youtube.com/watch?v={vid_id}",
-                    "title": snippet.get("title", ""),
-                    "channel": snippet.get("channelTitle", ""),
-                    "description": snippet.get("description", ""),
-                    "view_count": 0,
-                    "id": vid_id
-                })
-                
-        if video_ids:
-            stats_request = youtube.videos().list(
-                id=",".join(video_ids),
-                part="statistics"
+    if api_key:
+        try:
+            from googleapiclient.discovery import build
+            youtube = build("youtube", "v3", developerKey=api_key)
+            
+            request = youtube.search().list(
+                q=query,
+                part="snippet",
+                type="video",
+                maxResults=max_results
             )
-            stats_response = stats_request.execute()
-            stats_dict = {item["id"]: item.get("statistics", {}).get("viewCount", 0) for item in stats_response.get("items", [])}
-            for v in videos:
-                v["view_count"] = int(stats_dict.get(v["id"], 0))
-                
-        return videos
+            response = request.execute()
+            
+            video_ids = []
+            videos = []
+            for item in response.get("items", []):
+                vid_id = item.get("id", {}).get("videoId")
+                if vid_id:
+                    video_ids.append(vid_id)
+                    snippet = item.get("snippet", {})
+                    videos.append({
+                        "url": f"https://www.youtube.com/watch?v={vid_id}",
+                        "title": snippet.get("title", ""),
+                        "channel": snippet.get("channelTitle", ""),
+                        "description": snippet.get("description", ""),
+                        "view_count": 0,
+                        "id": vid_id
+                    })
+                    
+            if video_ids:
+                stats_request = youtube.videos().list(
+                    id=",".join(video_ids),
+                    part="statistics"
+                )
+                stats_response = stats_request.execute()
+                stats_dict = {item["id"]: item.get("statistics", {}).get("viewCount", 0) for item in stats_response.get("items", [])}
+                for v in videos:
+                    v["view_count"] = int(stats_dict.get(v["id"], 0))
+                    
+            return videos
+        except Exception as e:
+            print(f"    YouTube API search failed: {e}. Falling back to browser scraper...")
+
+    # Fallback to keyless browser-based scraping
+    try:
+        from .scraper import scrape_youtube_search_sync
+        return scrape_youtube_search_sync(query, max_results)
     except Exception as e:
-        print(f"    YouTube search failed: {e}")
+        print(f"    YouTube browser search fallback failed: {e}")
         return []
 
 def fetch_youtube_transcript(video_url_or_id: str) -> str:
-    """Fetch video transcript text using youtube-transcript-api."""
+    """Fetch video transcript text keylessly and version-resiliently using youtube-transcript-api."""
     video_id = video_url_or_id
     if "youtube.com" in video_url_or_id or "youtu.be" in video_url_or_id:
         match = re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', video_url_or_id)
@@ -344,8 +366,33 @@ def fetch_youtube_transcript(video_url_or_id: str) -> str:
             
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        return " ".join([item["text"] for item in transcript_list])
+        api = YouTubeTranscriptApi()
+        
+        # Support list-based or legacy static method based retrieval
+        if hasattr(api, 'list'):
+            transcript_list = api.list(video_id)
+            try:
+                transcript = transcript_list.find_transcript(['en'])
+            except Exception:
+                transcript = next(iter(transcript_list))
+                if transcript.is_translatable:
+                    try:
+                        transcript = transcript.translate('en')
+                    except Exception:
+                        pass
+            data = transcript.fetch()
+        else:
+            # Fallback to older static get_transcript method
+            data = YouTubeTranscriptApi.get_transcript(video_id)
+            
+        # Support both new class/dataclass structure and older dict structure
+        text_segments = []
+        for item in data:
+            if hasattr(item, 'text'):
+                text_segments.append(item.text)
+            elif isinstance(item, dict) and 'text' in item:
+                text_segments.append(item['text'])
+        return " ".join(text_segments)
     except Exception as e:
         print(f"    Failed to fetch transcript for {video_id}: {e}")
         return ""
@@ -481,11 +528,18 @@ def _check_relevance_overlap(src: dict, query: str) -> bool:
     return matches >= 1
 
 
-def _is_predefined_domain(url: str) -> bool:
-    """Check if a URL belongs to a predefined authority domain or .gov/.edu TLD."""
+def _is_predefined_domain(url: str, target_authority_domains: list = None) -> bool:
+    """Check if a URL belongs to a predefined authority domain, target dynamic domains, or .gov/.edu TLD."""
     url_lower = url.lower()
     domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url_lower)
     domain = domain_match.group(1) if domain_match else url_lower
+    
+    if target_authority_domains:
+        for t_domain in target_authority_domains:
+            t_domain_lower = t_domain.lower()
+            if t_domain_lower in domain or domain.endswith("." + t_domain_lower):
+                return True
+                
     for tier_info in SOURCE_QUALITY_TIERS.values():
         for d in tier_info.get("domains", []):
             if d in domain or domain.endswith("." + d):
@@ -496,7 +550,7 @@ def _is_predefined_domain(url: str) -> bool:
     return False
 
 
-def score_ambiguous_sources_batched(sources: list[dict], query: str) -> list[dict]:
+def score_ambiguous_sources_batched(sources: list[dict], query: str, target_authority_domains: list = None) -> list[dict]:
     """Uses a batched cheap-tier call to evaluate/score the ambiguous middle-band sources.
     Caps LLM scores for non-predefined domains so random sites can never reach Tier 1/2."""
     if not sources:
@@ -527,25 +581,25 @@ def score_ambiguous_sources_batched(sources: list[dict], query: str) -> list[dic
             batch_text += f"\n{idx+1}. URL: {src['url']}\n   Title: {src.get('title', 'N/A')}\n   Snippet: {src.get('snippet', 'N/A')}\n"
             
         prompt = f"""You are a strict research relevance analyst. The user is researching: "{query}"
-
+ 
 Score each search result from 0-100 on how likely it contains actual DATA, facts, or analysis RELEVANT to the research query above.
-
+ 
 CRITICAL SCORING RULES:
 - Score 0 if the page topic is UNRELATED to the research query (e.g. a product page about faucets/furniture for an escrow research query).
 - Score 0-20 for generic pages, dictionaries, login walls, or off-topic content.
 - Score 20-50 for tangentially related pages with little specific data.
 - Score 50-75 for pages likely containing relevant data, tables, specs, or analysis.
 - NEVER score above 75 — the tier system handles authority separately from content relevance.
-
+ 
 Results:
 {batch_text}
-
+ 
 Return ONLY a JSON array:
 [
   {{"url": "...", "score": 55, "rationale": "..."}}
 ]
 Return ONLY JSON."""
-
+ 
         try:
             response = extractor._call_gemini(
                 contents=prompt,
@@ -563,7 +617,7 @@ Return ONLY JSON."""
                         raw_score = min(max(int(score), 0), 100)
                         # Layer 2: Cap LLM scores for non-predefined domains
                         # Only known authority domains can score above 75
-                        if not _is_predefined_domain(url):
+                        if not _is_predefined_domain(url, target_authority_domains):
                             raw_score = min(raw_score, 75)
                         src["score"] = raw_score
                         src["label"] = _score_to_label(src["score"])
@@ -590,7 +644,7 @@ def _score_to_tier(score: int) -> str:
     return "TIER_6"
 
 
-def adjust_source_tier_by_content(src: dict, content: str, extraction: dict, topic: str):
+def adjust_source_tier_by_content(src: dict, content: str, extraction: dict, topic: str, target_authority_domains: list = None):
     """
     Adjusts the source's score, tier, and label based on the actual scraped content and extraction.
     - If the extraction was highly successful (many non-null parameters extracted), we boost the score.
@@ -610,8 +664,8 @@ def adjust_source_tier_by_content(src: dict, content: str, extraction: dict, top
             if k not in meta_keys:
                 total_dp += 1
                 if v is not None and v != "" and str(v).lower() != "null" and str(v).lower() != "n/a":
-                    extracted_count += 1
-                    
+                     extracted_count += 1
+                     
     # Calculate density of topic keywords in content
     topic_words = set(w.lower() for w in re.findall(r'\b\w{4,}\b', topic)
                       if w.lower() not in {'what', 'with', 'that', 'this', 'from', 'their',
@@ -652,7 +706,7 @@ def adjust_source_tier_by_content(src: dict, content: str, extraction: dict, top
     # Note: Only known authority domains (predefined/subject-owned) can exceed 75. 
     is_auth = False
     url = src.get("url", "")
-    if _is_predefined_domain(url) or _detect_subject_owned_source(url, topic):
+    if _is_predefined_domain(url, target_authority_domains) or _detect_subject_owned_source(url, topic):
         is_auth = True
         
     max_cap = 100 if is_auth else 75
@@ -690,6 +744,50 @@ def apply_diversity_and_anti_echo_chamber(sources: list[dict], domain_cap: int =
     return filtered_sources
 
 
+def route_urls_to_headings(urls: list[dict], sections: list[dict]) -> dict:
+    """
+    Given discovered URLs and blueprint sections, use AI to classify
+    which headings each URL can serve. One URL can serve multiple headings.
+    """
+    if not urls or not sections:
+        return {}
+        
+    prompt = f"""Given the following list of discovered URLs (with their titles and search snippets) and a list of blueprint section headings for a research report, classify which headings each URL is relevant to and can provide data for.
+    A single URL can be relevant to MULTIPLE headings. If a URL is not relevant to any heading, map it to an empty list.
+    
+    Discovered URLs:
+    {json.dumps([{"url": u["url"], "title": u.get("title", ""), "snippet": u.get("snippet", "")} for u in urls], indent=2)}
+    
+    Report Section Headings:
+    {json.dumps([{"id": s["id"], "heading": s["heading"], "instructions": s.get("instructions", "")} for s in sections], indent=2)}
+    
+    Output a JSON object with a single key "url_to_headings" mapping each URL to an array of matching section IDs.
+    Example:
+    {{
+      "url_to_headings": {{
+        "https://example.com/pricing": ["sec_pricing", "sec_competitors"],
+        "https://example.com/docs": ["sec_milestones"]
+      }}
+    }}
+    
+    Return ONLY valid JSON. No markdown formatting blocks or explanations."""
+
+    try:
+        response = extractor._call_gemini(
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(temperature=0.1),
+            tier="cheap",
+            judgment=False
+        )
+        parsed = extractor._parse_json_response(response.text)
+        if parsed and isinstance(parsed, dict) and "url_to_headings" in parsed:
+            return parsed["url_to_headings"]
+        return {}
+    except Exception as e:
+        print(f"Error in route_urls_to_headings: {e}")
+        return {}
+
+
 def discover_sources_for_session(
     session_id: str,
     vectors: list[dict],
@@ -697,14 +795,29 @@ def discover_sources_for_session(
     original_query: str,
     depth: str = "standard",
     output_folder: str = "",
-    progress_cb=None
+    progress_cb=None,
+    target_authority_domains: list = None
 ):
     """
-    Stage 2 Source Discovery & Prioritization.
+    Stage 2 Source Discovery & Prioritization with Blueprint Generation.
     """
+    from engine.persistence import get_session
+    session = get_session(session_id) or {}
+    answers = session.get("clarification_answers", [])
+
+    if progress_cb:
+        progress_cb("Generating report blueprint structure...")
+    from engine import discoverer
+    blueprint = discoverer.generate_blueprint(original_query, refined_prompt, vectors, answers)
+    
+    if output_folder:
+        try:
+            session_output.write_blueprint(output_folder, blueprint)
+        except Exception as e:
+            print(f"    Failed to save blueprint: {e}")
+
     if progress_cb:
         progress_cb("Classifying research intent...")
-        
     intent = classify_intent(original_query, refined_prompt)
     print(f"    Detected intent: {intent}")
     
@@ -721,9 +834,7 @@ def discover_sources_for_session(
             progress_cb(f"Discovering sources for vector '{topic}'...")
             
         # Scale search queries by depth
-        from engine import discoverer
         queries = discoverer.generate_search_queries(vector, refined_prompt, depth)
-        
         queries_to_run = queries
         vector_sources = []
         
@@ -739,7 +850,6 @@ def discover_sources_for_session(
 
             for c_key in matched_carriers:
                 tiered_urls = get_tiered_urls(c_key)
-                # Tier 2 consultancy (richest in compiled rates)
                 for url in tiered_urls.get("tier_2", []):
                     if url and url not in seen_urls:
                         seen_urls.add(url)
@@ -753,7 +863,6 @@ def discover_sources_for_session(
                             "tier": "TIER_2",
                             "label": f"Curated Blog: {c_key.title()}"
                         })
-                # Tier 1 official
                 for url in tiered_urls.get("tier_1", []):
                     if url and url not in seen_urls:
                         seen_urls.add(url)
@@ -767,7 +876,6 @@ def discover_sources_for_session(
                             "tier": "TIER_2",
                             "label": f"Curated Official: {c_key.title()}"
                         })
-                # Tier 3 sector
                 for url in tiered_urls.get("tier_3", []):
                     if url and url not in seen_urls:
                         seen_urls.add(url)
@@ -781,7 +889,6 @@ def discover_sources_for_session(
                             "tier": "TIER_3",
                             "label": f"Curated Sector: {c_key.title()}"
                         })
-                # Tier 4 library
                 for url in tiered_urls.get("tier_4", []):
                     if url and url not in seen_urls:
                         seen_urls.add(url)
@@ -878,7 +985,7 @@ def discover_sources_for_session(
         domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url_lower)
         domain = domain_match.group(1) if domain_match else url_lower
         
-        q_info = score_source_quality(src["url"], src.get("title"), src.get("snippet"), original_query, intent)
+        q_info = score_source_quality(src["url"], src.get("title"), src.get("snippet"), original_query, intent, target_authority_domains)
         src.update(q_info)
         score = src.get("score", 0)
         
@@ -899,13 +1006,48 @@ def discover_sources_for_session(
         
         if progress_cb:
             progress_cb(f"Evaluating {len(sources_to_llm_score)} ambiguous sources via AI...")
-        scored_ambiguous = score_ambiguous_sources_batched(sources_to_llm_score, original_query)
+        scored_ambiguous = score_ambiguous_sources_batched(sources_to_llm_score, original_query, target_authority_domains)
         all_scored = clear_cut_sources + scored_ambiguous + remaining_ambiguous
     else:
         all_scored = clear_cut_sources
         
     all_scored = [s for s in all_scored if s.get("score", 0) > 0]
     all_scored = apply_diversity_and_anti_echo_chamber(all_scored, domain_cap=5, research_subject=original_query)
+    
+    # Route final clean sources to blueprint headings using AI classification
+    if all_scored and blueprint.get("sections"):
+        if progress_cb:
+            progress_cb(f"Routing {len(all_scored)} top-quality sources to report sections...")
+        url_to_headings = route_urls_to_headings(all_scored, blueprint["sections"])
+        
+        # Apply routing and boost domains matching affinity list
+        for src in all_scored:
+            url = src["url"]
+            h_ids = url_to_headings.get(url, [])
+            src["relevant_heading_ids"] = h_ids
+            
+            # Boost score if domain matches target authority or affinity domains
+            url_lower = url.lower()
+            domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url_lower)
+            domain = domain_match.group(1) if domain_match else url_lower
+            
+            boost = 0
+            for sec in blueprint["sections"]:
+                if sec["id"] in h_ids:
+                    affinities = sec.get("source_affinity", [])
+                    if any(aff in domain or domain.endswith("." + aff) for aff in affinities):
+                        boost += 15
+            
+            if boost > 0:
+                src["score"] = min(100, src.get("score", 50) + boost)
+                src["tier"] = _score_to_tier(src["score"])
+                src["label"] = _score_to_label(src["score"])
+                print(f"      [Affinity boost] {url[:40]} score boosted to {src['score']} for {h_ids}")
+            
+            # Fallback if AI didn't assign any heading: assign to first section
+            if not src.get("relevant_heading_ids") and blueprint["sections"]:
+                src["relevant_heading_ids"] = [blueprint["sections"][0]["id"]]
+    
     all_scored = sorted(all_scored, key=lambda x: x.get("score", 0), reverse=True)
     
     if output_folder:
@@ -973,9 +1115,9 @@ def validate_page_entity(title: str, url: str, content: str, subject: str) -> di
             return {"valid": True, "reason": "SUCCESS"}
             
         snippet = content_lower[:3000]
-        prompt = f"""You are a research gatekeeper checking if a web page matches the target entity and scope.
+        prompt = f"""You are a strict research gatekeeper checking if a web page matches the target entity, scope, and query intent.
         
-Target Entity/Scope being researched: "{subject}"
+Target Entity/Scope/Topic being researched: "{subject}"
 
 Web Page Details:
 URL: {url}
@@ -984,9 +1126,10 @@ Snippet of content:
 {snippet}
 
 Evaluate if this web page:
-1. Belongs to a different entity (e.g., same name but completely different company/product, or generic top-level search portal, dictionary/translation page).
+1. Belongs to a different entity (e.g., same name but completely different company/product, or generic top-level search portal, dictionary/definition page).
 2. Is completely out of scope or irrelevant to the target research (e.g., wrong geography, wrong business model).
-3. Is a generic login page, placeholder, or empty shell.
+3. Is a generic consumer help portal, terms of service page, listicle blog (e.g. "top 10 reviews"), or marketing homepage with no detailed technical documentation or data points.
+4. Is a generic login page, placeholder, or empty shell.
 
 Return a JSON object matching this schema:
 {{
@@ -1080,6 +1223,17 @@ def deep_research_vector(
     vector_id = vector.get("id") or topic
     vector_scope = f"{topic}. {desc}. Overall task: {research_context}"
     
+    target_authority_domains = []
+    if output_folder:
+        config_path = os.path.join(output_folder, "run_config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                    target_authority_domains = config_data.get("target_authority_domains") or []
+            except Exception:
+                pass
+                
     _safe_progress(progress_cb, f"🚀 Researching vector: '{topic}'")
     
     scrape_urls = []
@@ -1155,14 +1309,24 @@ def deep_research_vector(
                 })
                 
         for src in all_discovered:
-            q_info = score_source_quality(src["url"], src["title"], src["snippet"], research_context)
+            q_info = score_source_quality(src["url"], src["title"], src["snippet"], research_context, target_authority_domains=target_authority_domains)
             src.update(q_info)
             
         all_discovered = [s for s in all_discovered if s.get("score", 0) > 0]
         scrape_urls = sorted(all_discovered, key=lambda x: x.get("score", 0), reverse=True)[:max_scrape]
         scrape_urls = [s for s in scrape_urls if not source_obviously_junk(s)]
 
-    scrape_urls = scrape_urls[:max_scrape]
+    # Partition scrape_urls to make sure YouTube videos are not starved out by web scores
+    yt_urls = [s for s in scrape_urls if s.get("source_type") == "youtube" or "youtube.com" in s.get("url", "").lower() or "youtu.be" in s.get("url", "").lower()]
+    web_urls = [s for s in scrape_urls if not (s.get("source_type") == "youtube" or "youtube.com" in s.get("url", "").lower() or "youtu.be" in s.get("url", "").lower())]
+    
+    web_urls = sorted(web_urls, key=lambda x: x.get("score", 0), reverse=True)
+    yt_urls = sorted(yt_urls, key=lambda x: x.get("score", 0), reverse=True)
+    
+    if yt_urls and max_scrape > 1:
+        scrape_urls = web_urls[:max_scrape - 1] + yt_urls[:1]
+    else:
+        scrape_urls = sorted(scrape_urls, key=lambda x: x.get("score", 0), reverse=True)[:max_scrape]
     page_extractions = []
     sources_used = []
     scraped_texts = []
@@ -1207,7 +1371,7 @@ def deep_research_vector(
                     print(f"      Information rate for {url}: {info_rate:.2f}")
                     
                     # Content-aware tiering adjustment
-                    adjust_source_tier_by_content(src, transcript, res.get("data", {}), topic)
+                    adjust_source_tier_by_content(src, transcript, res.get("data", {}), topic, target_authority_domains)
                     
                     src["had_data"] = True
                     src["status"] = "SUCCESS"
@@ -1255,13 +1419,14 @@ def deep_research_vector(
                 extraction = _extract_prices_from_page(markdown_content, topic, v_data_points, instruction)
                 if extraction and not extraction.get("no_data") and not (isinstance(extraction, dict) and extraction.get("found") is False):
                     extraction["_source_url"] = url
+                    extraction["_source_images"] = page.get("images", [])[:3]
                     page_extractions.append(extraction)
                     info_rate = check_saturation(markdown_content, scraped_texts)
                     scraped_texts.append(markdown_content)
                     print(f"      Information rate for {url}: {info_rate:.2f}")
                     
                     # Content-aware tiering adjustment
-                    adjust_source_tier_by_content(src, markdown_content, extraction, topic)
+                    adjust_source_tier_by_content(src, markdown_content, extraction, topic, target_authority_domains)
                     
                     src["had_data"] = True
                     src["status"] = "SUCCESS"
@@ -1316,7 +1481,7 @@ def deep_research_vector(
     for asrc in ai_sources:
         url = asrc.get("url") or asrc.get("uri")
         if url:
-            q_info = score_source_quality(url, asrc.get("title", ""), "", research_context)
+            q_info = score_source_quality(url, asrc.get("title", ""), "", research_context, target_authority_domains=target_authority_domains)
             src_entry = {
                 "url": url,
                 "title": asrc.get("title") or url,
@@ -1560,6 +1725,16 @@ def _merge_company_data(company: str, gemini_data, page_extractions: list, data_
     if not gemini_data and not page_extractions:
         return None
 
+    # Collect images
+    scraped_images = []
+    seen_img_urls = set()
+    for ext in page_extractions:
+        for img in ext.get("_source_images", []):
+            img_url = img.get("url")
+            if img_url and img_url not in seen_img_urls:
+                seen_img_urls.add(img_url)
+                scraped_images.append(img)
+
     if not page_extractions:
         if isinstance(gemini_data, list) and len(gemini_data) > 0:
             data = gemini_data[0] if isinstance(gemini_data[0], dict) else {"raw": gemini_data}
@@ -1568,12 +1743,15 @@ def _merge_company_data(company: str, gemini_data, page_extractions: list, data_
         else:
             data = {"raw_data": str(gemini_data)}
         data["company"] = company
+        data["_scraped_images"] = scraped_images
         return data
 
     if not gemini_data and len(page_extractions) == 1:
         data = page_extractions[0]
         data.pop("_source_url", None)
+        data.pop("_source_images", None)
         data["company"] = company
+        data["_scraped_images"] = scraped_images
         return data
 
     sources_data = ""
@@ -1582,6 +1760,7 @@ def _merge_company_data(company: str, gemini_data, page_extractions: list, data_
 
     for i, ext in enumerate(page_extractions):
         source = ext.pop("_source_url", f"Page {i+1}")
+        ext.pop("_source_images", None)  # Clean up so it doesn't clutter JSON prompt
         sources_data += f"\n--- Scraped from: {source} ---\n{json.dumps(ext, indent=2, default=str)}\n"
 
     prompt = _build_merge_prompt(company, data_points, instruction, sources_data)
@@ -1595,6 +1774,7 @@ def _merge_company_data(company: str, gemini_data, page_extractions: list, data_
         if parsed:
             if isinstance(parsed, dict):
                 parsed["company"] = company
+                parsed["_scraped_images"] = scraped_images
             return parsed
     except Exception as e:
         print(f"    Merge failed for {company}: {e}")
@@ -1602,12 +1782,13 @@ def _merge_company_data(company: str, gemini_data, page_extractions: list, data_
     if page_extractions:
         combined = {"company": company}
         for ext in page_extractions:
-            ext.pop("_source_url", None)
             combined.update(ext)
+        combined["_scraped_images"] = scraped_images
         return combined
     if gemini_data:
         if isinstance(gemini_data, dict):
             gemini_data["company"] = company
+            gemini_data["_scraped_images"] = scraped_images
             return gemini_data
         return {"company": company, "raw_data": gemini_data}
     return None
@@ -1647,3 +1828,289 @@ def _prioritize_urls(urls: list[str], max_count: int) -> list[str]:
 def _shorten_url(url: str, max_len: int = 60) -> str:
     url = url.replace("https://", "").replace("http://", "").replace("www.", "")
     return url[:max_len] + "..." if len(url) > max_len else url
+
+
+def extract_for_heading(section: dict, sources_data: list[dict], original_query: str) -> dict:
+    """
+    Given a blueprint section and its accumulated scraped contents,
+    extract structured information, key findings, and data points.
+    """
+    if not sources_data:
+        return {
+            "section_id": section["id"],
+            "success": False,
+            "error": "No sources available for this section.",
+            "data": None,
+            "sources": []
+        }
+        
+    extracted_items = []
+    unique_sources = []
+    
+    # We will extract from each source independently
+    for src in sources_data:
+        content = src.get("content")
+        url = src.get("url")
+        source_entry = src.get("source")
+        
+        if not content or len(content) < 100:
+            continue
+            
+        # Build prompt for extracting section details from this specific source
+        prompt = f"""You are a precise data extraction AI. Extract the relevant information from the web page content to help write the report section: "{section['heading']}".
+        
+        Section Instructions: {section.get('instructions', '')}
+        Section Sub-headings to cover: {', '.join(section.get('sub_headings', []))}
+        Original Query context: {original_query}
+        
+        PAGE CONTENT:
+        {content[:40000]}
+        
+        Rules:
+        1. Extract specific facts, numbers, rates, entities, process steps, timeline events, or comparison parameters.
+        2. Identify any process flows that could be represented as flowcharts, or comparisons that could be tables.
+        3. Return ONLY a valid JSON object with the keys:
+           - "findings": A list of specific factual findings or text snippets extracted from the page.
+           - "data_points": Key-value pairs of any parameters, pricing, rates, or metrics.
+           - "entities": Any platforms, competitors, or compliance bodies mentioned.
+           - "process_steps": A list of steps for any workflows or transaction flows detected.
+           - "timeline_events": A list of events with dates/milestones if any roadmap/milestones are detected.
+           - "found": true/false
+           
+        Return ONLY valid JSON. No markdown fences, no explanations."""
+        
+        try:
+            result = extractor._call_gemini(
+                contents=prompt,
+                config=extractor.types.GenerateContentConfig(temperature=0.1),
+                tier="cheap",
+                judgment=False
+            )
+            parsed = extractor._parse_json_response(result.text)
+            if parsed and parsed.get("found"):
+                parsed["_source_url"] = url
+                extracted_items.append(parsed)
+                if source_entry:
+                    unique_sources.append(source_entry)
+        except Exception as e:
+            print(f"Error extracting for heading {section['heading']} from {url}: {e}")
+            
+    # Now merge all the extractions for this heading
+    if not extracted_items:
+        return {
+            "section_id": section["id"],
+            "success": False,
+            "error": "Failed to extract data from sources.",
+            "data": None,
+            "sources": []
+        }
+        
+    # Build a prompt to merge all section extractions into a single structured representation
+    merge_prompt = f"""Merge the extracted research data for the report section "{section['heading']}" from multiple sources into ONE consolidated JSON object.
+    
+    Section Instructions: {section.get('instructions', '')}
+    Sub-headings to cover: {', '.join(section.get('sub_headings', []))}
+    
+    Source Extractions:
+    {json.dumps(extracted_items, indent=2)}
+    
+    The merged output MUST be a clean JSON object containing:
+    - "consolidated_findings": A list of detailed factual points, combining duplicates and resolving conflicts.
+    - "structured_data": A clean dictionary of all parameters, metrics, or comparisons.
+    - "workflows": A list of workflows or transaction flows (with steps) that can be drawn as flowcharts.
+    - "timelines": A list of chronological events/milestones.
+    - "sources": A list of URLs that contributed to this section.
+    
+    Return ONLY valid JSON. No markdown fences, no explanations."""
+    
+    try:
+        result = extractor._call_gemini(
+            contents=merge_prompt,
+            config=extractor.types.GenerateContentConfig(temperature=0.1),
+            tier="strong",
+            judgment=True
+        )
+        parsed = extractor._parse_json_response(result.text)
+        if parsed:
+            return {
+                "section_id": section["id"],
+                "success": True,
+                "data": parsed,
+                "sources": unique_sources
+            }
+    except Exception as e:
+        print(f"Error merging extractions for heading {section['heading']}: {e}")
+        
+    # Fallback to simple combine
+    combined = {
+        "consolidated_findings": [f for item in extracted_items for f in item.get("findings", [])],
+        "structured_data": {},
+        "workflows": [w for item in extracted_items for w in item.get("process_steps", [])],
+        "timelines": [t for item in extracted_items for t in item.get("timeline_events", [])],
+        "sources": [item["_source_url"] for item in extracted_items]
+    }
+    for item in extracted_items:
+        combined["structured_data"].update(item.get("data_points", {}))
+        
+    return {
+        "section_id": section["id"],
+        "success": True,
+        "data": combined,
+        "sources": unique_sources
+    }
+
+
+def scrape_and_extract_for_pool(pool, max_workers=3, progress_cb=None, depth="standard"):
+    """
+    Async scraper pool. Workers pop URLs from the shared queue,
+    scrape them, and fan out content to heading accumulators.
+    """
+    def _safe_progress(cb, msg):
+        if cb:
+            try:
+                cb(msg)
+            except Exception:
+                pass
+
+    def _scrape_worker(entry):
+        url = entry["url"]
+        source_type = entry.get("source_type")
+        
+        _safe_progress(progress_cb, f"📄 Scraping ({entry.get('score', 50)} pts): {_shorten_url(url)}")
+        
+        content = ""
+        images = []
+        
+        try:
+            if source_type == "youtube" or "youtube.com" in url or "youtu.be" in url:
+                transcript = fetch_youtube_transcript(url)
+                if transcript:
+                    content = transcript
+            else:
+                page = _run_async(fetch_page(url, timeout=20000))
+                if page.get("success") and page.get("markdown") and len(page["markdown"]) > 100:
+                    content = page["markdown"]
+                    images = page.get("images", [])[:3]
+        except Exception as e:
+            print(f"Scraper worker exception for {url}: {e}")
+            
+        if content and len(content) > 100:
+            # Validate page entity to check for soft-404 or completely off-topic page
+            vector_scope = f"{entry.get('title', '')}. Overall query: {pool.blueprint.get('document_title', '')}"
+            val = validate_page_entity(entry.get("title", ""), url, content, vector_scope)
+            if not val["valid"]:
+                _safe_progress(progress_cb, f"    [Skipped source {val['reason']}: {_shorten_url(url)}]")
+                session_output.update_sources_ledger_entry(pool.output_folder, url, val["reason"], False, entry)
+                session_output.append_failure(pool.output_folder, url, entry.get("tier", "TIER_6"), val["reason"], "Validation failed")
+                return False
+                
+            # Submit to pool
+            pool.submit_scraped_content(url, content, images, entry)
+            
+            # Write to files
+            session_output.update_sources_ledger_entry(pool.output_folder, url, "SUCCESS", True, entry)
+            session_output.append_raw_research(pool.output_folder, url, entry.get("tier", "TIER_6"), entry.get("label", "Web Page Scraped"), content)
+            return True
+        else:
+            session_output.update_sources_ledger_entry(pool.output_folder, url, "FAILED", False, entry)
+            session_output.append_failure(pool.output_folder, url, entry.get("tier", "TIER_6"), "Scrape returned empty", "Marked as FAILED")
+            return False
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        
+        while True:
+            # Check if all headings are satisfied
+            hungry = pool.get_hungry_headings()
+            if not hungry:
+                _safe_progress(progress_cb, "✅ All headings satisfied. Stopping scraper loop.")
+                break
+                
+            entry = pool.pop_next()
+            if entry is None:
+                # Queue empty but some headings still hungry
+                # Trigger adaptive re-discovery for hungry headings
+                _safe_progress(progress_cb, f"🔍 Scrape queue empty. Running adaptive re-discovery for {len(hungry)} hungry headings...")
+                new_sources = adaptive_rediscovery(pool, hungry)
+                if not new_sources:
+                    _safe_progress(progress_cb, "⚠️ Truly exhausted all sources and re-discovery options.")
+                    break
+                continue
+            
+            # Launch async scraper worker
+            fut = executor.submit(_scrape_worker, entry)
+            futures[fut] = entry
+            
+        # Wait for in-flight tasks to finish
+        if futures:
+            concurrent.futures.wait(futures.keys())
+
+
+def adaptive_rediscovery(pool, hungry_heading_ids) -> int:
+    """
+    When headings are still hungry after initial sources are exhausted,
+    generate MORE SPECIFIC search queries targeting those hungry headings,
+    search them, and add to the pool.
+    """
+    from ddgs import DDGS
+    from engine import discoverer
+    new_count = 0
+    
+    for heading_id in hungry_heading_ids:
+        heading = next((s for s in pool.blueprint.get("sections", []) if s["id"] == heading_id), None)
+        if not heading:
+            continue
+            
+        # Generate specific search query using Gemini
+        prompt = f"""You are a search query expert. Generate exactly 3 highly specific, targeted search queries for DuckDuckGo to find information for the following specific report section:
+        
+        Section Title: "{heading['heading']}"
+        Sub-headings: {', '.join(heading.get('sub_headings', []))}
+        Instructions: {heading.get('instructions', '')}
+        
+        CRITICAL RULES:
+        - Do not use site: or site operators.
+        - Keep them under 8 words.
+        - Focus strictly on answering the specific questions in this section.
+        
+        Return a JSON list of exactly 3 query strings. Return ONLY the JSON list."""
+        
+        try:
+            response = extractor._call_gemini(
+                contents=prompt,
+                config=extractor.types.GenerateContentConfig(temperature=0.2),
+                tier="cheap",
+                judgment=False
+            )
+            parsed = extractor._parse_json_response(response.text)
+            if parsed and isinstance(parsed, list):
+                with DDGS() as ddgs:
+                    for q in parsed[:3]:
+                        q_sanitized = _sanitize_search_query(q)
+                        if not q_sanitized:
+                            continue
+                        try:
+                            hits = list(ddgs.text(q_sanitized, max_results=5))
+                            for hit in hits:
+                                url = hit.get("href", "")
+                                if url and url not in pool.seen_urls:
+                                    if any(blocked in url.lower() for blocked in BLOCKED_DOMAINS):
+                                        continue
+                                    
+                                    # Since this query is specific to this hungry heading, tag it directly
+                                    pool.add_source(
+                                        url=url,
+                                        title=hit.get("title", ""),
+                                        snippet=hit.get("body", ""),
+                                        score=70,  # default moderate score for re-discovery
+                                        source_type="web",
+                                        relevant_heading_ids=[heading_id],
+                                        vector_id="re-discovery"
+                                    )
+                                    new_count += 1
+                        except Exception as e:
+                            print(f"Adaptive search failed for '{q_sanitized}': {e}")
+        except Exception as e:
+            print(f"Error in adaptive rediscovery for heading {heading_id}: {e}")
+            
+    return new_count

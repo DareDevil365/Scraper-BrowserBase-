@@ -97,6 +97,14 @@ def _init_db(conn):
         conn.execute("ALTER TABLE research_sessions ADD COLUMN effort_estimate TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE research_sessions ADD COLUMN target_authority_domains TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE research_sessions ADD COLUMN required_deliverables TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
 
@@ -215,8 +223,8 @@ def save_session(session_id: str, session: dict):
     now = datetime.now().isoformat()
     conn.execute("""
         INSERT OR REPLACE INTO research_sessions
-        (id, original_query, original_context, refined_prompt, clarification_answers, research_vectors, output_format, status, result_data, output_file_path, output_folder, sources_used, vector_results, quality_scores, depth, effort_estimate, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, original_query, original_context, refined_prompt, clarification_answers, research_vectors, output_format, status, result_data, output_file_path, output_folder, sources_used, vector_results, quality_scores, depth, effort_estimate, target_authority_domains, required_deliverables, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         session_id,
         session.get("original_query", ""),
@@ -234,6 +242,8 @@ def save_session(session_id: str, session: dict):
         json.dumps(session.get("quality_scores", {}), default=str),
         session.get("depth", "standard"),
         json.dumps(session.get("effort_estimate", {}), default=str),
+        json.dumps(session.get("target_authority_domains", []), default=str),
+        json.dumps(session.get("required_deliverables", []), default=str),
         session.get("created_at", now),
         now
     ))
@@ -253,7 +263,7 @@ def update_session_status(session_id: str, status: str, **kwargs):
         if k in ["original_query", "original_context", "refined_prompt", "output_format", "output_file_path", "output_folder", "depth"]:
             fields.append(f"{k} = ?")
             params.append(v)
-        elif k in ["clarification_answers", "research_vectors", "result_data", "sources_used", "vector_results", "quality_scores", "effort_estimate"]:
+        elif k in ["clarification_answers", "research_vectors", "result_data", "sources_used", "vector_results", "quality_scores", "effort_estimate", "target_authority_domains", "required_deliverables"]:
             fields.append(f"{k} = ?")
             params.append(json.dumps(v, default=str))
             
@@ -289,7 +299,7 @@ def delete_session(session_id: str) -> bool:
 
 def _session_row_to_dict(row) -> dict:
     d = dict(row)
-    for key in ["clarification_answers", "research_vectors", "result_data", "sources_used", "vector_results", "quality_scores", "effort_estimate"]:
+    for key in ["clarification_answers", "research_vectors", "result_data", "sources_used", "vector_results", "quality_scores", "effort_estimate", "target_authority_domains", "required_deliverables"]:
         if d.get(key):
             try:
                 d[key] = json.loads(d[key])

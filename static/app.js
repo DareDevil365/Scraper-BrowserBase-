@@ -342,6 +342,21 @@ async function startVectorResearch() {
     const startBtns = document.querySelectorAll('#step-blueprint .btn-primary');
     startBtns.forEach(b => { b.disabled = true; });
 
+    // Save the edited refinedPrompt textarea before starting the research stream
+    const refinedPromptVal = document.getElementById('refinedPrompt').value;
+    try {
+        await fetch('/api/research/save_prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                refined_prompt: refinedPromptVal
+            })
+        });
+    } catch (err) {
+        console.error('Failed to save refined prompt:', err);
+    }
+
     hideAllSteps();
     document.getElementById('step-progress').classList.remove('hidden');
     setStatus('Researching...', 'busy');

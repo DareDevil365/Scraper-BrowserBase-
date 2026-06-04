@@ -47,12 +47,12 @@ def main():
         vectors=vectors
     )
     
-    v1_path = os.path.join(output_folder, "final_report_v1.md")
+    v1_path = os.path.join(output_folder, "final_report_v1.txt")
     try:
         if os.path.exists(v1_path):
             os.remove(v1_path)
     except Exception as e:
-        print("Could not remove old final_report_v1.md:", e)
+        print("Could not remove old final_report_v1.txt:", e)
         
     synthesis = None
     for chunk in stream:

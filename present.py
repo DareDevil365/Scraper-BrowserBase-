@@ -8,7 +8,7 @@ Referenced by Synthesis.md Â§8 (Presentation Layer). Standalone: run by hand w
 CONTRACTS (kept identical to Synthesis.md Â§1 and fallback_synth.py):
   * Reads ONLY from disk. Never re-scrapes, never calls a model.
   * Input precedence for the body it presents:
-        final_report_v2.md  >  final_report_v1.md  >  final_report_fallback.md
+        final_report_v2.txt  >  final_report_v1.txt  >  final_report_fallback.txt
     Whichever exists (richest first) is the prose body.
   * Structured visuals (tables / charts / timeline) are promoted from
     extracted/<vector_id>.json â€” the same payloads synthesis used.
@@ -96,10 +96,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "body_precedence": {
         "order": [
-            "final_report_v2.md",
-            "final_report_v1.md",
-            "final_report_fallback.md",
-            "partial_report.md"
+            "final_report_v2.txt",
+            "final_report_v1.txt",
+            "final_report_fallback.txt",
+            "partial_report.txt"
         ]
     },
     "visual_detection": {
@@ -191,10 +191,10 @@ CONFIG = load_present_config()
 # 1. Disk loading (read-only)
 # =============================================================================
 BODY_PRECEDENCE = CONFIG.get("body_precedence", {}).get("order", [
-    "final_report_v2.md",
-    "final_report_v1.md",
-    "final_report_fallback.md",
-    "partial_report.md",
+    "final_report_v2.txt",
+    "final_report_v1.txt",
+    "final_report_fallback.txt",
+    "partial_report.txt",
 ])
 
 FALLBACK_BANNER_RE = re.compile(r"mechanically assembled", re.I)
@@ -343,6 +343,8 @@ def load_best_payload(run_dir: Path) -> dict[str, Any]:
         "sections": raw_sections,
         "is_fallback": is_fallback,
         "synthesis_mode": state_json.get("synthesis_mode", "ai"),
+        "original_query": run_config.get("query") or state_json.get("query") or "",
+        "clarification_answers": run_config.get("clarification_answers") or state_json.get("clarification_answers") or [],
     }
     return payload
 
@@ -786,11 +788,49 @@ def render_html_template(presentable: dict[str, Any]) -> str:
     rendered_presentable = copy.deepcopy(presentable)
     for sec in rendered_presentable.get("sections", []):
         body_md = sec.get("body", "")
+        
+        # Replace markdown images in body_md first
+        body_md = re.sub(
+            r'!\[(.*?)\]\((.*?)\)',
+            r'<div class="image-wrapper"><img class="report-img" src="\2" alt="\1"/><div class="image-fallback"></div></div>',
+            body_md
+        )
+        
         if _HAVE_MD:
             import markdown as _md
             sec["body"] = _md.markdown(body_md, extensions=["tables", "fenced_code"])
         else:
             sec["body"] = _md_to_html(body_md)
+            
+        # Post-process body HTML to render Mermaid code blocks properly
+        import html as std_html
+        def unescape_mermaid(match):
+            escaped_code = match.group(1)
+            # Unescape HTML entities inside mermaid block
+            unescaped_code = std_html.unescape(escaped_code)
+            # Strip outer tags if any (like <code>)
+            unescaped_code = re.sub(r'^<code[^>]*>|</code>$', '', unescaped_code, flags=re.DOTALL)
+            return f'<div class="mermaid">{unescaped_code}</div>'
+            
+        sec["body"] = re.sub(
+            r'<pre><code class="language-mermaid">(.*?)</code></pre>',
+            unescape_mermaid,
+            sec["body"],
+            flags=re.DOTALL
+        )
+        sec["body"] = re.sub(
+            r'<pre class="mermaid">(.*?)</pre>',
+            unescape_mermaid,
+            sec["body"],
+            flags=re.DOTALL
+        )
+        
+        # Also wrap any existing raw HTML img tags that might have slipped through
+        sec["body"] = re.sub(
+            r'<img\s+([^>]*?)src="([^"]+)"([^>]*?)>',
+            r'<div class="image-wrapper"><img class="report-img" src="\2" \1 \3/><div class="image-fallback"></div></div>',
+            sec["body"]
+        )
             
     # Set up jinja2 environment using FileSystemLoader and select_autoescape
     env = _jinja2.Environment(
@@ -839,7 +879,13 @@ def render_docx(presentable: dict[str, Any], out_path: Path) -> bool:
     # Sections
     for sec in presentable.get("sections", []):
         doc.add_heading(sec["title"], level=1)
-        _md_to_docx(doc, sec.get("body", ""))
+        _md_to_docx(doc, sec.get("body", ""), out_path.parent / "media")
+        if sec.get("chart_bytes"):
+            try:
+                import io
+                doc.add_picture(io.BytesIO(sec["chart_bytes"]), width=Inches(6.0))
+            except Exception as e:
+                print(f"  [docx] Failed to add chart image: {e}", file=sys.stderr)
 
     # Tables
     tables = presentable.get("tables", [])
@@ -904,8 +950,42 @@ def render_docx(presentable: dict[str, Any], out_path: Path) -> bool:
         raise
 
 
-def _md_to_docx(doc, md_text: str):
-    """Minimal markdown -> docx: headings, bullets, fenced code, tables, paragraphs."""
+def download_image_cached(url: str, media_dir: Path) -> Path | None:
+    if not url.startswith("http"):
+        return None
+    try:
+        import urllib.request
+        import hashlib
+        hashed = hashlib.md5(url.encode()).hexdigest()[:12]
+        ext = ".jpg"
+        if ".png" in url.lower():
+            ext = ".png"
+        elif ".gif" in url.lower():
+            ext = ".gif"
+        elif ".webp" in url.lower():
+            ext = ".webp"
+            
+        local_path = media_dir / f"img_{hashed}{ext}"
+        if local_path.exists():
+            return local_path
+            
+        media_dir.mkdir(parents=True, exist_ok=True)
+        # Download image with user-agent
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            with open(local_path, "wb") as f:
+                f.write(response.read())
+        return local_path
+    except Exception as e:
+        print(f"Failed to download image {url}: {e}", file=sys.stderr)
+        return None
+
+
+def _md_to_docx(doc, md_text: str, media_dir: Path | None = None):
+    """Minimal markdown -> docx: headings, bullets, fenced code, tables, paragraphs, and images."""
     lines = md_text.splitlines()
     in_code = False
     table_lines = []
@@ -944,6 +1024,8 @@ def _md_to_docx(doc, md_text: str):
         table_lines = []
 
     for line in lines:
+        if '<div class="chart-container"' in line or 'data:image/png;base64' in line or 'alt="Figures"' in line or 'alt="Chart"' in line or '</div>' in line:
+            continue
         if line.strip().startswith("```"):
             flush_table()
             in_code = not in_code
@@ -972,6 +1054,25 @@ def _md_to_docx(doc, md_text: str):
             doc.add_paragraph(re.sub(r"^\s*[-*]\s+", "", line), style="List Bullet")
             continue
         if line.strip():
+            # Check if it is a standalone image
+            img_match = re.match(r"^!\[(.*?)\]\((.*?)\)$", line.strip())
+            if img_match:
+                alt = img_match.group(1)
+                url = img_match.group(2)
+                if media_dir:
+                    local_path = download_image_cached(url, media_dir)
+                    if local_path and local_path.exists():
+                        try:
+                            doc.add_picture(str(local_path), width=Inches(5.5))
+                            continue
+                        except Exception as ex:
+                            print(f"Failed to insert picture {local_path} into DOCX: {ex}", file=sys.stderr)
+                # Fallback to paragraph link
+                p = doc.add_paragraph()
+                p.add_run(f"📷 [Image: {alt or 'Diagram'}] ").bold = True
+                p.add_run(url).italic = True
+                continue
+                
             doc.add_paragraph(line.strip())
             
     if table_lines:
@@ -1058,6 +1159,8 @@ def _pdf_via_reportlab(presentable: dict[str, Any], out_path: Path) -> bool:
                 table_lines = []
 
             for line in sec.get("body", "").splitlines():
+                if '<div class="chart-container"' in line or 'data:image/png;base64' in line or 'alt="Figures"' in line or 'alt="Chart"' in line or '</div>' in line:
+                    continue
                 if line.strip().startswith("|") and line.strip().endswith("|"):
                     table_lines.append(line)
                     continue
@@ -1078,6 +1181,17 @@ def _pdf_via_reportlab(presentable: dict[str, Any], out_path: Path) -> bool:
             
             if table_lines:
                 flush_pdf_table()
+                
+            if sec.get("chart_bytes"):
+                try:
+                    import io
+                    img_data = io.BytesIO(sec["chart_bytes"])
+                    # Use RLImage imported as RLImage in imports
+                    flow.append(RLImage(img_data, width=6*inch, height=2.5*inch))
+                    flow.append(Spacer(1, 0.12 * inch))
+                except Exception as e:
+                    print(f"  [PDF] Failed to add chart image: {e}", file=sys.stderr)
+                    
             flow.append(Spacer(1, 0.12 * inch))
 
         # Tables
@@ -1347,6 +1461,36 @@ def main(argv=None) -> int:
     # Run through presentation filter to build presentable allowlist payload
     import presentation_filter
     presentable = presentation_filter.build_presentable(payload, sources, config)
+
+    # Matplotlib chart rendering and embedding
+    if not args.no_charts and _HAVE_MPL:
+        # Match presentable sections with payload sections to access data
+        payload_sections_by_id = {sec.get("vector_id"): sec for sec in payload.get("sections", []) if sec.get("vector_id")}
+        
+        for p_sec in presentable.get("sections", []):
+            vid = p_sec.get("vector_id")
+            if not vid:
+                continue
+            matching_payload_sec = payload_sections_by_id.get(vid)
+            if not matching_payload_sec:
+                continue
+            
+            sec_data = matching_payload_sec.get("data")
+            if not sec_data:
+                continue
+                
+            # Detect visuals (like bar charts) in the extracted section data
+            visuals = detect_visuals(sec_data)
+            for vis in visuals:
+                if vis.get("kind") == "barchart":
+                    png_bytes = render_barchart(vis)
+                    if png_bytes:
+                        b64_str = base64.b64encode(png_bytes).decode("utf-8")
+                        img_tag = f'\n\n<div class="chart-container" style="text-align: center; margin: 1.5rem 0;"><img src="data:image/png;base64,{b64_str}" alt="{vis.get("title", "Chart")}" style="max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius-md);"/></div>\n\n'
+                        # Append to markdown body
+                        p_sec["body"] = p_sec.get("body", "") + img_tag
+                        p_sec["chart_bytes"] = png_bytes
+                        print(f"  [Charts] Embedded Matplotlib bar chart for vector '{vid}' into section body.")
 
     # Stamp banner if fallback mode is active
     banner_cfg = config.get("banner", {})

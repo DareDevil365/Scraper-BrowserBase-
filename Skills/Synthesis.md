@@ -25,8 +25,9 @@ exhausted run is never empty-handed.
 
 ---
 
-## 1. Input Contract
+## 1. Input Contract & Document Chunking
 
+### 1.1 Input Constraints
 - Read **only** from `run_<id>/extracted/<vector_id>.json` (per-vector payloads
   written by Stage 2) plus `state.json` and `sources.json`.
 - **Never re-scrape and never call discovery from here.** A crashed run resumes
@@ -34,10 +35,17 @@ exhausted run is never empty-handed.
 - If `extracted/` is missing a vector that `state.json` lists as settled, treat
   it as `EMPTY` (`§3`), do not error out.
 
+### 1.2 MapReduce Document Chunking (For Heavy Pages / PDFs)
+- **Problem**: Large documents (e.g., >80,000 characters) exceed context limits or lead to "lost-in-the-middle" retrieval failure when extracting metrics.
+- **Chunking**: Split documents into overlapping segments (e.g., 20,000 characters with a 2,000 character overlap).
+- **Map Step**: Run parallel cheap-tier extraction calls (`API_Limit_Tuning.md §2.3`) on each individual segment, extracting parameters independently.
+- **Reduce Step**: Use a mid-tier LLM call to merge, deduplicate, and reconcile the segment extractions into a single, clean `extracted/<vector_id>.json` payload that conforms to the target schema.
+
 ---
 
-## 2. Section Model + Dedupe
+## 2. Section Model, Dedupe & Cross-Vector Conflict Resolution
 
+### 2.1 Section Mapping & Deduplication
 - **One vector = one section.** Group all payloads by `vector_id`.
 - When a `vector_id` appears more than once (e.g. the same topic ran several
   times, some `FAILED` and some `SUCCESS`), **keep the single richest
@@ -45,6 +53,11 @@ exhausted run is never empty-handed.
   fields, tie-broken by most recent timestamp.
 - Flush each section to `partial_report.md` **as it completes**, so a dying call
   loses at most one in-flight section, never the whole run.
+
+### 2.2 Cross-Vector Conflict Resolution (Logical Reconciliation)
+- Before beginning report compilation, run a cross-check pass between related vectors (e.g. Vector A: Pricing, Vector B: Features).
+- **Rule Verification**: Validate that dependencies align (e.g., if Vector B states "feature X is only in the Enterprise plan", confirm that Vector A's Pricing table lists "feature X" under "Enterprise plan", not "Free plan").
+- **Conflict Resolution Prompt**: If a logical contradiction is found, invoke a cheap-tier LLM call to cross-reference the raw sources of both vectors, select the more authoritative source (preferring direct official sites over third-party articles), and overwrite the incorrect values before generating prose.
 
 ---
 
@@ -89,11 +102,18 @@ Never overwrite v1.
 
 ---
 
-## 5. Provenance
+## 5. Provenance & Agentic Self-Critique
 
+### 5.1 Provenance
 Grounding-sourced near-future / recent claims (e.g. the 2026 events in run
 data) are attributed as *"per sources"* rather than asserted as fact. Keep
 source attribution per section from `sources.json`.
+
+### 5.2 Agentic Self-Critique Audit
+- **Verification Gate**: After generating the narrative and table data for a report section (before appending it to `partial_report.md`), trigger an independent audit pass using a cheap-tier LLM call.
+- **Audit Prompt**: Pass the generated text and the raw source data to the audit cell:
+  *"Compare the generated report section against the raw source data. Flag any: (a) numbers, figures, or claims not found in raw data (hallucinations); (b) spelling or capitalization typos (especially of product names). Return a JSON list of correction items."*
+- **Auto-Correction Loop**: If errors are identified, re-generate the section with the audit corrections. Run at most one self-correction pass to conserve quota.
 
 ---
 

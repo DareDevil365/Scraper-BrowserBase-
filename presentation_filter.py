@@ -374,6 +374,40 @@ def clean_report_title(title: str) -> str:
     return title
 
 
+def deduplicate_paragraphs(body_text: str, seen_paragraphs_set: set) -> str:
+    if not body_text:
+        return ""
+    lines = body_text.split("\n")
+    cleaned_lines = []
+    
+    current_para = []
+    
+    def flush_para():
+        if not current_para:
+            return
+        para_text = "\n".join(current_para).strip()
+        current_para.clear()
+        if not para_text:
+            return
+            
+        norm_text = re.sub(r'\W+', '', para_text.lower())
+        if norm_text and len(norm_text) > 10:
+            if norm_text in seen_paragraphs_set:
+                return
+            seen_paragraphs_set.add(norm_text)
+        cleaned_lines.append(para_text)
+
+    for line in lines:
+        if not line.strip():
+            flush_para()
+            cleaned_lines.append("")
+        else:
+            current_para.append(line)
+            
+    flush_para()
+    return "\n".join(cleaned_lines)
+
+
 def build_presentable(payload: Dict[str, Any], sources: List[Dict[str, Any]] | None = None, config: Dict[str, Any] | None = None) -> Dict[str, Any]:
     config = config or {}
     sources = sources or payload.get("sources", [])
@@ -391,13 +425,19 @@ def build_presentable(payload: Dict[str, Any], sources: List[Dict[str, Any]] | N
         "tables": [],
         "gaps": [],
         "sources": [],
+        "original_query": payload.get("original_query", ""),
+        "clarification_answers": payload.get("clarification_answers", []),
     }
 
     raw_summary = payload.get("executive_summary") or payload.get("summary")
     if raw_summary and not is_placeholder_text(raw_summary) and "no summary available" not in str(raw_summary).lower():
-        result["executive_summary"] = raw_summary
+        # Strip generic AI filler phrases from summary
+        summary_clean = re.sub(r'(?i)\b(as mentioned before|as discussed previously|like we discussed|according to the grounding results|it is important to note that|it is worth mentioning that|please note that|let\'s dive into the details|in conclusion|overall|summarizing the above)\b[,.]?\s*', '', raw_summary)
+        result["executive_summary"] = summary_clean.strip()
 
     raw_sections = payload.get("sections") or payload.get("vectors") or payload.get("results") or []
+    
+    seen_paragraphs = set()
 
     for sec in raw_sections:
         if not isinstance(sec, dict):
@@ -419,12 +459,17 @@ def build_presentable(payload: Dict[str, Any], sources: List[Dict[str, Any]] | N
         if is_placeholder_text(body):
             body = ""
 
+        # Paragraph-level deduplication and AI filler stripping
+        if body:
+            body = deduplicate_paragraphs(body, seen_paragraphs)
+            body = re.sub(r'(?i)\b(as mentioned before|as discussed previously|like we discussed|according to the grounding results|it is important to note that|it is worth mentioning that|please note that|let\'s dive into the details|in conclusion|overall|summarizing the above)\b[,.]?\s*', '', body)
+
         table_data = flatten_json_to_table(data, topic=topic)
         if table_data:
             table_data["vector_id"] = vector_id
             result["tables"].append(table_data)
 
-        if body:
+        if body.strip():
             result["sections"].append({
                 "vector_id": vector_id,
                 "title": topic,

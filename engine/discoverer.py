@@ -251,21 +251,37 @@ def refine_research_prompt(query: str, answers: list[dict], context: str = '') -
     """
     if not extractor._clients:
         return {"success": False, "error": "Gemini not configured."}
-
-    answers_text = json.dumps(answers, indent=2)
     
-    prompt = f"""You are a master Research Architect. Your job is to take a raw research query, combine it with the user's explicit answers to clarifying questions, and compile a definitive research plan.
+    # Format answers transcript verbatim
+    formatted_answers = []
+    for i, ans in enumerate(answers):
+        q_text = ans.get("question_text") or ans.get("question") or ans.get("question_id") or "Question"
+        a_text = ans.get("answer", "No answer provided")
+        formatted_answers.append(f"Question {i+1}: {q_text}\nAnswer {i+1}: {a_text}\n")
+    answers_transcript = "\n".join(formatted_answers)
+    
+    prompt = f"""You are a master Research Architect and text expander. Your job is to take a raw research query, combine it with the user's explicit answers to clarifying questions, and compile a definitive, highly detailed, and fully expanded research plan/brief.
+
+CRITICAL REQUIREMENT: Do NOT rewrite, change, summarize, or drop any of the user's original query, answers, or core requests. The `refined_prompt` and the list of `vectors` MUST completely cover every detail, background context, specific company list, and requirement mentioned by the user. You are strictly forbidden from omitting, grouping away, or dropping any target company, product, regulatory body, or constraint (e.g., volume tiers, shipping services) from either the `refined_prompt` or the `vectors` list.
+
+Specifically, inside the `refined_prompt` field of the returned JSON, you MUST structure it as follows:
+1. "ORIGINAL USER QUERY": Reproduce the original query verbatim.
+2. "CLARIFYING QUESTIONS & VERBATIM ANSWERS": List all the clarification questions and the user's answers verbatim.
+3. "DETAILED RESEARCH REQUIREMENTS & INSTRUCTIONS": Expand on the query, describing the specific goals, constraints, target geography/market (e.g. India-specific escrow/payments regulations if applicable), and detailed parameters to research.
+4. "REQUIRED DELIVERABLES CHECKLIST": Provide a clear, actionable list of all deliverables, comparisons, tables, Gantt charts, or flowcharts explicitly requested by the user.
 
 Original Query: "{query}"
 Additional Context: "{context}"
-Clarification Answers:
-{answers_text}
+Clarification Answers Transcript:
+{answers_transcript}
 
 You must output a JSON object containing:
-1. `refined_prompt`: A detailed, multi-paragraph master prompt that encapsulates exactly what needs to be researched, the boundaries, target geography, timeline, and goals.
-2. `vectors`: A list of 5 to 10 independent research vectors (sub-topics/questions). Each vector should represent a distinct line of inquiry that can be researched in parallel.
+1. `refined_prompt`: The expanded master prompt as described above. Ensure all user inputs and cross-questioning responses are preserved verbatim and built upon.
+2. `vectors`: A list of 5 to 10 independent research vectors (sub-topics/questions). Each vector should represent a distinct line of inquiry that can be researched in parallel. Crucially, ensure that every single target company, competitor, product, regulatory body, or specific research request mentioned in the original query or answers transcript is mapped to and addressed by at least one vector. Do not group them so broadly that specific companies or questions get merged or ignored; generate company-specific or detail-specific vectors as needed to ensure complete coverage.
 3. `suggested_data_points`: Specific, measurable data points/metrics to extract across the research.
-4. `quality_notes`: Specific instructions on what sources to trust based on the topic (e.g. consultancies for market size, SEC filings for financials, developer docs for API limits).
+4. `quality_notes`: Specific instructions on what sources to trust based on the topic.
+5. `target_authority_domains`: A JSON list of specific domain names, TLD patterns, or official website strings that are highly relevant to and authoritative for this specific research topic. Identify and list these target domains/platforms dynamically based on the exact query to avoid domain drift.
+6. `required_deliverables`: A JSON checklist of all specific deliverables, questions, tables, comparisons, or items explicitly requested in the user's raw prompt or clarification replies.
 
 JSON structure:
 {{
@@ -273,15 +289,17 @@ JSON structure:
   "vectors": [
     {{
       "id": "vector_id",
-      "topic": "Vector Title (e.g., Competitor Analysis, Market Size & Forecast, Technology Stack)",
-      "description": "Detailed explanation of what needs to be answered by this vector.",
+      "topic": "Vector Title (e.g., [Company Name] Logistics Pricing, Surcharges Comparison, Industry Benchmarks)",
+      "description": "Detailed explanation of what needs to be answered by this vector. Crucially, explicitly mention the specific target companies, products, or questions this vector is researching.",
       "search_hints": ["keyword 1", "keyword 2"],
-      "data_points": ["parameter_1", "parameter_2"], // specific metrics, numbers, or facts to extract for this vector
-      "priority": "high" // high, medium, low
+      "data_points": ["parameter_1", "parameter_2"],
+      "priority": "high"
     }}
   ],
   "suggested_data_points": ["data point A", "data point B"],
-  "quality_notes": "..."
+  "quality_notes": "...",
+  "target_authority_domains": ["domain1.com", "domain2.gov"],
+  "required_deliverables": ["Checklist Item 1", "Checklist Item 2"]
 }}
 
 Return ONLY valid JSON. No explanations, no markdown blocks."""
@@ -292,7 +310,7 @@ Return ONLY valid JSON. No explanations, no markdown blocks."""
             tier="strong",
             judgment=True,
             config=extractor.types.GenerateContentConfig(
-                temperature=0.3,
+                temperature=0.2,
             )
         )
         raw_text = response.text
@@ -326,6 +344,8 @@ Return ONLY valid JSON. No explanations, no markdown blocks."""
                 "vectors": parsed.get("vectors", []),
                 "suggested_data_points": parsed.get("suggested_data_points", []),
                 "quality_notes": parsed.get("quality_notes", ""),
+                "target_authority_domains": parsed.get("target_authority_domains", []),
+                "required_deliverables": parsed.get("required_deliverables", []),
                 "effort_estimate": effort,
                 "depth": depth,
                 "raw_response": raw_text,
@@ -338,6 +358,8 @@ Return ONLY valid JSON. No explanations, no markdown blocks."""
                 "vectors": [],
                 "suggested_data_points": [],
                 "quality_notes": "",
+                "target_authority_domains": [],
+                "required_deliverables": [],
                 "raw_response": raw_text,
                 "error": "Failed to parse structured JSON refined prompt from Gemini."
             }
@@ -348,9 +370,100 @@ Return ONLY valid JSON. No explanations, no markdown blocks."""
             "vectors": [],
             "suggested_data_points": [],
             "quality_notes": "",
+            "target_authority_domains": [],
+            "required_deliverables": [],
             "raw_response": "",
             "error": str(e)
         }
+
+
+def generate_blueprint(query: str, refined_prompt: str, vectors: list[dict], answers: list[dict]) -> dict:
+    """
+    Generate a dynamic document blueprint BEFORE scraping.
+    The AI decides what headings the report needs based on the query and vectors,
+    specifying content_type, mapped_vector_ids, source_affinity, and instructions.
+    """
+    if not extractor._clients:
+        return {"sections": [], "presentation_rules": {}}
+
+    prompt = f"""You are a master Document Architect. Your task is to design the ideal document blueprint/template structure for a comprehensive research report.
+    
+    Original Query: {query}
+    Refined Research Prompt & Deliverables:
+    {refined_prompt}
+    
+    Research Vectors:
+    {json.dumps(vectors, indent=2)}
+    
+    Clarification Answers:
+    {json.dumps(answers, indent=2)}
+    
+    You need to output a JSON object representing the document blueprint. The report should NOT use standard generic headings. It should have highly tailored, specific, and logical headings based on the query. For example, if the query is about "Competitor escrow for clothing startups in India", the sections could be:
+    - Escrow Regulatory & Compliance Landscape in India
+    - Key Transaction Milestones & Refund Trigger Workflows
+    - Competitor Escrow Comparison Matrix
+    - Platform-by-Platform Escrow Deep Dives (Craftsvilla, Jaypore, Glowroad, Meesho, etc.)
+    - Best Practices & Integration Roadmap for Silaai
+    
+    For each section, specify:
+    1. `id`: A unique string ID (e.g. `sec_compliance`, `sec_milestones`).
+    2. `heading`: The tailored section title.
+    3. `sub_headings`: An array of sub-heading strings.
+    4. `content_type`: The primary visual format of the content. Must be one of:
+       - `narrative` (paragraphs and lists)
+       - `narrative_with_flowchart` (text and a Mermaid flowchart)
+       - `flowchart` (primarily a Mermaid flowchart diagram)
+       - `comparison_table` (a markdown comparison table comparing entities/platforms)
+       - `data_matrix` (a structured parameters/data table)
+       - `timeline` (a Mermaid timeline/gantt chart showing a roadmap/milestones)
+    5. `mapped_vector_ids`: A list of IDs of the search vectors that contain relevant information for this heading. This connects search vectors to report sections (many-to-many).
+    6. `source_affinity`: A list of specific domains or source patterns (e.g. ["rbi.org.in", "razorpay.com"]) that are particularly authoritative for this heading's topic.
+    7. `instructions`: Specific guidance for the synthesizer on what to cover, what visual assets to produce, and what analysis to perform in this section. Make sure all requirements in the query and cross-questioning are fully covered.
+    
+    You must also output `presentation_rules`:
+    - `use_flowcharts_for`: process flows, payment flows, customer journeys, transaction triggers.
+    - `use_tables_for`: competitor parameter comparison, rate structures, feature tables.
+    - `use_timelines_for`: roadmaps, transaction milestones, rollouts.
+    - `embed_images`: true
+    
+    JSON structure:
+    {{
+      "document_title": "Ideal Report Title",
+      "sections": [
+        {{
+          "id": "section_id",
+          "heading": "Section Heading",
+          "sub_headings": ["Sub-heading A", "Sub-heading B"],
+          "content_type": "narrative_with_flowchart",
+          "mapped_vector_ids": ["vector_id_1", "vector_id_2"],
+          "source_affinity": ["domain1.com"],
+          "instructions": "Detailed synthesizer instructions..."
+        }}
+      ],
+      "presentation_rules": {{
+        "use_flowcharts_for": [...],
+        "use_tables_for": [...],
+        "use_timelines_for": [...],
+        "embed_images": true
+      }}
+    }}
+    
+    Return ONLY valid JSON. No markdown formatting blocks or explanations."""
+
+    try:
+        response = extractor._call_gemini(
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(temperature=0.2),
+            tier="strong",
+            judgment=True
+        )
+        parsed = extractor._parse_json_response(response.text)
+        if parsed and isinstance(parsed, dict) and "sections" in parsed:
+            return parsed
+        return {"sections": [], "presentation_rules": {}}
+    except Exception as e:
+        print(f"Error generating blueprint: {e}")
+        return {"sections": [], "presentation_rules": {}}
 
 
 def generate_search_queries(vector: dict, context: str = '', depth: str = 'standard') -> list[str]:

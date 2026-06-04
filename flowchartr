@@ -1,0 +1,1343 @@
+# Blueprint-First Research with Expanded Prompts & Premium Presentation
+
+This document contains the definitive, highly detailed technical specification and implementation plan for the Blueprint-First Research pipeline. It covers prompt expansion (to prevent summarization), cross-questioning verbatim transcripts, async source fanning, and a premium HTML/PDF/DOCX presentation layer.
+
+---
+
+## 🚀 Architectural Overview
+
+```mermaid
+graph TD
+    Q[User Raw Query] --> CQ[Cross-Questioning Loop]
+    CQ --> |Verbatim Transcript| PE[Prompt Expander]
+    PE --> |Expanded Master Prompt| BP[Blueprint Generator]
+    PE --> |Vectors & Authority Domains| SD[Source Discovery Pool]
+    
+    BP --> |blueprint.json| SPQ[Shared Priority Queue]
+    SD --> |Deduplicated URLs| SPQ
+    
+    SPQ --> |pop highest priority| SC[Async Scraper Workers]
+    SC --> |raw markdown + images| CC[Content Cache]
+    
+    CC --> |fan-out| ROUTE[AI URL Router]
+    ROUTE --> |Heading Tagging| H_ACC[Heading-Level Accumulators]
+    
+    H_ACC --> |Saturated?| SYN[Blueprint-Aware Section Synthesizer]
+    H_ACC --> |Hungry?| REDISC[Adaptive Re-Discovery]
+    REDISC --> |new targeted URLs| SPQ
+    
+    SYN --> |Stream Markdown + Assets| PRES[Premium Presentation Engine]
+    PRES --> |Jinja2 / CSS / JS| HTML[Premium report.html]
+    PRES --> |python-docx / ReportLab| DOCS[report.docx / report.pdf]
+```
+
+---
+
+## 🛠️ Detailed Phase-by-Phase Specifications
+
+### Phase 1: Verbatim Input Preservation & Master Prompt Expansion
+
+#### 1. File to Modify: `engine/discoverer.py` (Function: `refine_research_prompt`)
+
+##### Design Objective:
+The Gemini model must never summarize, contract, or omit any details from the user's raw query, additional context, or cross-questioning responses. The output prompt must be a **fully expanded, comprehensive research brief** that lists all constraints, target entities, and specific questions verbatim.
+
+##### Python Implementation:
+
+```python
+def refine_research_prompt(query: str, answers: list[dict], context: str = '') -> dict:
+    """
+    Takes the raw user query, the answers to the clarifying questions, and additional context
+    to compile a highly detailed, expanded research plan/brief without summarizing.
+    """
+    if not extractor._clients:
+        return {"success": False, "error": "Gemini not configured."}
+
+    # Format answers verbatim to ensure no details are lost
+    formatted_answers = []
+    for i, ans in enumerate(answers):
+        q_text = ans.get("question", "Question")
+        a_text = ans.get("answer", "No answer provided")
+        formatted_answers.append(f"Question {i+1}: {q_text}\nAnswer {i+1}: {a_text}\n")
+    answers_transcript = "\n".join(formatted_answers)
+    
+    # Construction of the system instruction for the LLM
+    prompt = f"""You are a master Research Architect. Your job is to take a raw research query, combine it with the user's explicit answers to clarifying questions, and compile a definitive, highly detailed, and fully expanded research plan/brief.
+
+CRITICAL REQUIREMENT: Do NOT rewrite, change, summarize, or drop any of the user's original query, answers, or core requests. The `refined_prompt` MUST be a fully expanded version of all user inputs, containing every detail, background context, specific company list, and requirement mentioned by the user.
+
+Specifically, inside the `refined_prompt` field of the returned JSON, you MUST structure it as follows:
+1. "ORIGINAL USER QUERY": Reproduce the original query verbatim.
+2. "CLARIFYING QUESTIONS & VERBATIM ANSWERS": List all the clarification questions and the user's answers verbatim.
+3. "DETAILED RESEARCH REQUIREMENTS & INSTRUCTIONS": Expand on the query, describing the specific goals, constraints, target geography/market (e.g. India-specific escrow/payments regulations if applicable), and detailed parameters to research.
+4. "REQUIRED DELIVERABLES CHECKLIST": Provide a clear, actionable list of all deliverables, comparisons, tables, Gantt charts, or flowcharts explicitly requested by the user.
+
+Original Query: "{query}"
+Additional Context: "{context}"
+Clarification Answers Transcript:
+{answers_transcript}
+
+You must output a JSON object containing:
+1. `refined_prompt`: The expanded master prompt as described above. Ensure all user inputs and cross-questioning responses are preserved verbatim and built upon. There is no word limit; make it as detailed as possible to guide the research.
+2. `vectors`: A list of 5 to 10 independent research vectors (sub-topics/questions). Each vector should represent a distinct line of inquiry that can be researched in parallel.
+3. `suggested_data_points`: Specific, measurable data points/metrics to extract across the research.
+4. `quality_notes`: Specific instructions on what sources to trust based on the topic.
+5. `target_authority_domains`: A JSON list of specific domain names, TLD patterns, or official website strings that are highly relevant to and authoritative for this specific research topic. Identify and list these target domains/platforms dynamically based on the exact query to avoid domain drift.
+6. `required_deliverables`: A JSON checklist of all specific deliverables, questions, tables, comparisons, or items explicitly requested in the user's raw prompt or clarification replies.
+
+JSON structure:
+{{
+  "refined_prompt": "...",
+  "vectors": [
+    {{
+      "id": "vector_id",
+      "topic": "Vector Title (e.g., Competitor Analysis, Market Size & Forecast, Technology Stack)",
+      "description": "Detailed explanation of what needs to be answered by this vector.",
+      "search_hints": ["keyword 1", "keyword 2"],
+      "data_points": ["parameter_1", "parameter_2"],
+      "priority": "high"
+    }}
+  ],
+  "suggested_data_points": ["data point A", "data point B"],
+  "quality_notes": "...",
+  "target_authority_domains": ["domain1.com", "domain2.gov"],
+  "required_deliverables": ["Checklist Item 1", "Checklist Item 2"]
+}}
+
+Return ONLY valid JSON. No explanations, no markdown blocks."""
+
+    try:
+        response = extractor._call_gemini(
+            contents=prompt,
+            tier="strong",
+            judgment=True,
+            config=extractor.types.GenerateContentConfig(temperature=0.2)
+        )
+        parsed = extractor._parse_json_response(response.text)
+        
+        if parsed and isinstance(parsed, dict) and "vectors" in parsed:
+            # Map depth for effort estimate mapping
+            depth = "standard"
+            for ans in answers:
+                qid = ans.get("question_id", "").lower()
+                val = str(ans.get("answer", "")).lower()
+                if "depth" in qid:
+                    if "surface" in val:
+                        depth = "surface"
+                    elif "deep" in val:
+                        depth = "deep"
+                    break
+            
+            if depth == "surface":
+                effort = { "sources_to_discover": 5, "pages_to_scrape": 10, "synthesis_passes": 1 }
+            elif depth == "deep":
+                effort = { "sources_to_discover": 30, "pages_to_scrape": 60, "synthesis_passes": 3 }
+            else:
+                effort = { "sources_to_discover": 12, "pages_to_scrape": 25, "synthesis_passes": 2 }
+
+            return {
+                "success": True,
+                "refined_prompt": parsed.get("refined_prompt", ""),
+                "vectors": parsed.get("vectors", []),
+                "suggested_data_points": parsed.get("suggested_data_points", []),
+                "quality_notes": parsed.get("quality_notes", ""),
+                "target_authority_domains": parsed.get("target_authority_domains", []),
+                "required_deliverables": parsed.get("required_deliverables", []),
+                "effort_estimate": effort,
+                "depth": depth,
+                "raw_response": response.text,
+                "error": None
+            }
+        else:
+            return {"success": False, "error": "Invalid JSON parsed from Gemini."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+```
+
+---
+
+### Phase 2: Dynamic Blueprint Generation (Dynamic Report Templates)
+
+#### 1. File to Modify: `engine/discoverer.py` (Function: `generate_blueprint`)
+
+##### Design Objective:
+The report's section headers must not be statically mapped to vector query topics. Instead, a dedicated LLM pass uses the expanded master prompt to design an ideal document outline. The outline contains section-specific requirements, source-authority mappings, and format instructions.
+
+##### Python Implementation:
+
+```python
+def generate_blueprint(query: str, refined_prompt: str, vectors: list[dict], answers: list[dict]) -> dict:
+    """
+    Generate a dynamic document blueprint BEFORE scraping.
+    The AI decides what headings the report needs based on the query and vectors,
+    specifying content_type, mapped_vector_ids, source_affinity, and instructions.
+    """
+    if not extractor._clients:
+        return {"sections": [], "presentation_rules": {}}
+
+    prompt = f"""You are a master Document Architect. Your task is to design the ideal document blueprint/template structure for a comprehensive research report.
+    
+    Original Query: {query}
+    Refined Research Prompt & Deliverables:
+    {refined_prompt}
+    
+    Research Vectors:
+    {json.dumps(vectors, indent=2)}
+    
+    Clarification Answers:
+    {json.dumps(answers, indent=2)}
+    
+    You need to output a JSON object representing the document blueprint. The report should NOT use standard generic headings. It should have highly tailored, specific, and logical headings based on the query. For example, if the query is about "Competitor escrow for clothing startups in India", the sections could be:
+    - Escrow Regulatory & Compliance Landscape in India
+    - Key Transaction Milestones & Refund Trigger Workflows
+    - Competitor Escrow Comparison Matrix
+    - Platform-by-Platform Escrow Deep Dives (Craftsvilla, Jaypore, Glowroad, Meesho, etc.)
+    - Best Practices & Integration Roadmap for Silaai
+    
+    For each section, specify:
+    1. `id`: A unique string ID (e.g. `sec_compliance`, `sec_milestones`).
+    2. `heading`: The tailored section title.
+    3. `sub_headings`: An array of sub-heading strings.
+    4. `content_type`: The primary visual format of the content. Must be one of:
+       - `narrative` (paragraphs and lists)
+       - `narrative_with_flowchart` (text and a Mermaid flowchart)
+       - `flowchart` (primarily a Mermaid flowchart diagram)
+       - `comparison_table` (a markdown comparison table comparing entities/platforms)
+       - `data_matrix` (a structured parameters/data table)
+       - `timeline` (a Mermaid timeline/gantt chart showing a roadmap/milestones)
+    5. `mapped_vector_ids`: A list of IDs of the search vectors that contain relevant information for this heading. This connects search vectors to report sections (many-to-many).
+    6. `source_affinity`: A list of specific domains or source patterns (e.g. ["rbi.org.in", "razorpay.com"]) that are particularly authoritative for this heading's topic.
+    7. `instructions`: Specific guidance for the synthesizer on what to cover, what visual assets to produce, and what analysis to perform in this section. Make sure all requirements in the query and cross-questioning are fully covered.
+    
+    You must also output `presentation_rules`:
+    - `use_flowcharts_for`: process flows, payment flows, customer journeys, transaction triggers.
+    - `use_tables_for`: competitor parameter comparison, rate structures, feature tables.
+    - `use_timelines_for`: roadmaps, transaction milestones, rollouts.
+    - `embed_images`: true (enable embedding relevant images from sources).
+    
+    JSON structure:
+    {{
+      "document_title": "Ideal Report Title",
+      "sections": [
+        {{
+          "id": "section_id",
+          "heading": "Section Heading",
+          "sub_headings": ["Sub-heading A", "Sub-heading B"],
+          "content_type": "narrative_with_flowchart",
+          "mapped_vector_ids": ["vector_id_1", "vector_id_2"],
+          "source_affinity": ["domain1.com"],
+          "instructions": "Detailed synthesizer instructions..."
+        }}
+      ],
+      "presentation_rules": {{
+        "use_flowcharts_for": [...],
+        "use_tables_for": [...],
+        "use_timelines_for": [...],
+        "embed_images": true
+      }}
+    }}
+    
+    Return ONLY valid JSON. No markdown formatting blocks or explanations."""
+
+    try:
+        response = extractor._call_gemini(
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(temperature=0.2),
+            tier="strong",
+            judgment=True
+        )
+        parsed = extractor._parse_json_response(response.text)
+        if parsed and isinstance(parsed, dict) and "sections" in parsed:
+            return parsed
+        return {"sections": [], "presentation_rules": {}}
+    except Exception as e:
+        print(f"Error generating blueprint: {e}")
+        return {"sections": [], "presentation_rules": {}}
+```
+
+---
+
+### Phase 3: Global Source Pool & Async Fanning Engine
+
+#### 1. File to Modify: `engine/source_pool.py`
+
+##### Design Objective:
+Maintain a thread-safe global queue of discovered URLs. Scraping happens once globally. The scraped markdown content, metadata, and extracted images are pushed and mapped (fanned out) to all blueprint headings that require information on that domain or vector topic.
+
+##### Python Implementation:
+
+```python
+import heapq
+import threading
+import json
+import os
+
+class SourcePool:
+    """
+    Thread-safe shared priority queue of URLs to scrape.
+    URLs are tagged with ALL relevant blueprint heading IDs.
+    Scraped content is accumulated per-heading.
+    """
+    def __init__(self, blueprint: dict, output_folder: str):
+        self.queue = []            # list of (-score, url, entry_dict) for heapq
+        self.scraped_cache = {}    # url -> content string
+        self.extractions = {}      # url -> extraction dict
+        self.heading_data = {}     # heading_id -> list of dicts: {"content": ..., "images": ..., "source": ..., "url": ...}
+        self.seen_urls = set()
+        self.lock = threading.Lock()
+        self.blueprint = blueprint
+        self.output_folder = output_folder
+
+        # Initialize heading data structures
+        for sec in self.blueprint.get("sections", []):
+            sid = sec["id"]
+            self.heading_data[sid] = []
+
+    def add_source(self, url: str, title: str, snippet: str, score: float, 
+                   source_type: str, relevant_heading_ids: list[str], vector_id: str):
+        """Add a URL to the pool, tagged with which headings it serves, if not already seen."""
+        with self.lock:
+            if url in self.seen_urls:
+                # Update headings if this URL serves additional ones
+                for item in self.queue:
+                    entry = item[2]
+                    if entry["url"] == url:
+                        for hid in relevant_heading_ids:
+                            if hid not in entry["relevant_heading_ids"]:
+                                entry["relevant_heading_ids"].append(hid)
+                return
+            
+            self.seen_urls.add(url)
+            entry = {
+                "url": url,
+                "title": title,
+                "snippet": snippet,
+                "score": score,
+                "source_type": source_type,
+                "relevant_heading_ids": list(relevant_heading_ids),
+                "vector_id": vector_id,
+                "scraped": False
+            }
+            # We push onto a min-heap, so negate the score for a max-priority queue
+            heapq.heappush(self.queue, (-score, url, entry))
+
+    def pop_next(self) -> dict or None:
+        """Pop the highest-priority unscraped URL entry."""
+        with self.lock:
+            while self.queue:
+                _, _, entry = heapq.heappop(self.queue)
+                if not entry["scraped"]:
+                    return entry
+            return None
+
+    def submit_scraped_content(self, url: str, content: str, images: list, source_entry: dict):
+        """
+        Called after a scraper finishes. Stores raw content and fans it out
+        to all mapped heading accumulators.
+        """
+        with self.lock:
+            self.scraped_cache[url] = content
+            source_entry["scraped"] = True
+
+            # Save in queue entries if we still have references to it
+            for item in self.queue:
+                entry = item[2]
+                if entry["url"] == url:
+                    entry["scraped"] = True
+
+            for heading_id in source_entry["relevant_heading_ids"]:
+                if heading_id not in self.heading_data:
+                    self.heading_data[heading_id] = []
+                self.heading_data[heading_id].append({
+                    "content": content,
+                    "images": images,
+                    "source": source_entry,
+                    "url": url
+                })
+
+    def submit_extraction(self, url: str, extraction: dict):
+        """Submit structures/parameters extracted from a scraped page."""
+        with self.lock:
+            self.extractions[url] = extraction
+
+    def get_heading_status(self, heading_id: str) -> str:
+        """Check if a heading has enough successful scraped data sources."""
+        data = self.heading_data.get(heading_id, [])
+        successful = [d for d in data if d.get("content") and len(d["content"]) > 100]
+        # Satisfied threshold: 4 successful sources.
+        if len(successful) >= 4:
+            return "satisfied"
+        elif len(successful) >= 1:
+            return "partial"
+        return "hungry"
+
+    def get_hungry_headings(self) -> list[str]:
+        """Return heading IDs that still need more data."""
+        hungry = []
+        for sec in self.blueprint.get("sections", []):
+            sid = sec["id"]
+            if self.get_heading_status(sid) in ("hungry", "partial"):
+                hungry.append(sid)
+        return hungry
+```
+
+#### 2. File to Modify: `engine/deep_extractor.py` (Functions: `discover_sources_for_session`, `route_urls_to_headings`, `scrape_and_extract_for_pool`, `adaptive_rediscovery`)
+
+##### Design Objective:
+Perform global searches for all vectors in parallel, route discovered URLs to headings using a batch classification prompt, run an async worker pool to pull and scrape, and trigger adaptive re-discovery searches for headings that remain "hungry" (under-sourced).
+
+##### Python Implementation:
+
+```python
+import concurrent.futures
+from engine import discoverer
+from engine import scraper
+from engine import extractor
+import urllib.parse
+
+def route_urls_to_headings(urls: list[dict], sections: list[dict]) -> dict:
+    """
+    AI routing mapping urls to sections using a cheap batch Gemini call.
+    """
+    if not urls or not sections:
+        return {}
+        
+    prompt = f"""Given these scraped URLs and these report headings, classify which headings each URL is relevant to.
+    A URL can be relevant to multiple headings.
+    
+    URLs: {json.dumps([{"url": u["url"], "title": u.get("title", ""), "snippet": u.get("snippet", "")} for u in urls])}
+    
+    Headings: {json.dumps([{"id": s["id"], "heading": s["heading"], "instructions": s.get("instructions", "")} for s in sections])}
+    
+    Return JSON format: {{"url_to_headings": {{"url1": ["sec_1", "sec_3"], "url2": ["sec_2"]}}}}
+    Return ONLY valid JSON. No markdown code blocks."""
+
+    try:
+        response = extractor._call_gemini(
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(temperature=0.1),
+            tier="cheap",
+            judgment=False
+        )
+        parsed = extractor._parse_json_response(response.text)
+        return parsed.get("url_to_headings", {}) if parsed else {}
+    except Exception as e:
+        print(f"Error routing urls to headings: {e}")
+        return {}
+
+
+def discover_sources_for_session(
+    session_id: str,
+    vectors: list[dict],
+    refined_prompt: str,
+    original_query: str,
+    depth: str,
+    output_folder: str,
+    target_authority_domains: list
+) -> dict:
+    """
+    Globally discovers sources for the session, routes them to headings,
+    and writes to output_folder/scrape_queue.json to feed the SourcePool.
+    """
+    # 1. Generate queries for all vectors
+    all_queries = []
+    for vec in vectors:
+        queries = discoverer.generate_search_queries(vec, refined_prompt, depth)
+        for q in queries:
+            all_queries.append((q, vec["id"]))
+            
+    # 2. Run searches in parallel
+    discovered_urls = {} # url -> dict
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = []
+        for q, vec_id in all_queries:
+            # call search engine API (e.g. DuckDuckGo or Perplexity)
+            from engine.scraper import ddg_search
+            futures.append(executor.submit(ddg_search, q, vec_id))
+            
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                results = fut.result()
+                for r in results:
+                    url = r["url"]
+                    if url not in discovered_urls:
+                        discovered_urls[url] = r
+            except Exception as e:
+                print(f"Search future failed: {e}")
+
+    # 3. Route URLs to blueprint headings
+    blueprint_path = os.path.join(output_folder, "blueprint.json")
+    if os.path.exists(blueprint_path):
+        with open(blueprint_path, "r", encoding="utf-8") as f:
+            blueprint = json.load(f)
+    else:
+        # Generate blueprint fallback
+        blueprint = discoverer.generate_blueprint(original_query, refined_prompt, vectors, [])
+        with open(blueprint_path, "w", encoding="utf-8") as f:
+            json.dump(blueprint, f, indent=2)
+
+    url_list = list(discovered_urls.values())
+    sections = blueprint.get("sections", [])
+    routing_map = route_urls_to_headings(url_list, sections)
+    
+    # 4. Filter and score URLs using authority boosts
+    queue_sources = []
+    for url, info in discovered_urls.items():
+        rel_headings = routing_map.get(url, [])
+        if not rel_headings:
+            # Map based on vector matching if AI failed to route
+            mapped_vec = info.get("vector_id")
+            rel_headings = [s["id"] for s in sections if mapped_vec in s.get("mapped_vector_ids", [])]
+            
+        score = 50.0
+        parsed_domain = urllib.parse.urlparse(url).netloc.lower()
+        
+        # Boost domains matched in target authority domains
+        if any(d.lower() in parsed_domain for d in target_authority_domains):
+            score += 30.0
+            
+        # Boost domains listed in specific section affinities
+        for hid in rel_headings:
+            sec_obj = next((s for s in sections if s["id"] == hid), None)
+            if sec_obj and any(d.lower() in parsed_domain for d in sec_obj.get("source_affinity", [])):
+                score += 15.0
+                
+        info["score"] = score
+        info["relevant_heading_ids"] = rel_headings
+        queue_sources.append(info)
+        
+    # Write to queue file
+    queue_path = os.path.join(output_folder, "scrape_queue.json")
+    with open(queue_path, "w", encoding="utf-8") as f:
+        json.dump(queue_sources, f, indent=2)
+        
+    return {"success": True, "count": len(queue_sources)}
+
+
+def scrape_and_extract_for_pool(pool: SourcePool, max_workers: int = 3, progress_cb = None, depth: str = "standard"):
+    """
+    Worker threads pull unscraped URLs from the SourcePool priority queue,
+    run async requests, save raw files, and submit scraped text/images.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        
+        while True:
+            # Get headings that need more data
+            hungry = pool.get_hungry_headings()
+            if not hungry:
+                if progress_cb:
+                    progress_cb("All report sections satisfied. Stopping scraping.")
+                break
+                
+            entry = pool.pop_next()
+            if entry is None:
+                # Queue empty, attempt adaptive re-discovery for remaining hungry headings
+                if progress_cb:
+                    progress_cb(f"Queue empty. Triggering adaptive re-discovery for hungry sections: {hungry}")
+                new_sources = adaptive_rediscovery(pool, hungry)
+                if new_sources == 0:
+                    break # Exhausted all resources
+                continue
+                
+            fut = executor.submit(_scrape_single_url, entry, pool, progress_cb)
+            futures[fut] = entry
+            
+        concurrent.futures.wait(futures.keys())
+
+
+def _scrape_single_url(entry: dict, pool: SourcePool, progress_cb) -> bool:
+    url = entry["url"]
+    if progress_cb:
+        progress_cb(f"Scraping: {url}")
+        
+    try:
+        from engine.scraper import fetch_page
+        result = fetch_page(url)
+        content = result.get("markdown", "")
+        images = result.get("images", [])[:3] # Limit to 3 images per page
+        
+        if content and len(content) > 100:
+            pool.submit_scraped_content(url, content, images, entry)
+            # Perform structured parameter extraction on the content
+            extraction = _extract_facts_from_content(content, entry, pool.blueprint)
+            pool.submit_extraction(url, extraction)
+            return True
+    except Exception as e:
+        print(f"Failed to scrape {url}: {e}")
+        
+    # Submit empty content on failure to mark URL as completed
+    pool.submit_scraped_content(url, "", [], entry)
+    return False
+
+
+def _extract_facts_from_content(content: str, entry: dict, blueprint: dict) -> dict:
+    """Uses a cheap LLM call to extract specific parameters and entities mentioned on this page."""
+    prompt = f"""Extract specific facts, numbers, rates, and entities related to the blueprint requirements from this scraped markdown content.
+    
+    URL: {entry['url']}
+    Title: {entry.get('title', '')}
+    Markdown Content (Truncated):
+    {content[:6000]}
+    
+    Return as JSON: {{"extracted_facts": ["fact 1", "fact 2"], "entity_metrics": {{"entity": {{"metric": "value"}}}}}}
+    Return ONLY valid JSON."""
+    try:
+        response = extractor._call_gemini(
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(temperature=0.1),
+            tier="cheap",
+            judgment=False
+        )
+        return extractor._parse_json_response(response.text) or {}
+    except Exception:
+        return {}
+
+
+def adaptive_rediscovery(pool: SourcePool, hungry_heading_ids: list[str]) -> int:
+    """
+    Triggered when the queue is exhausted but sections are still hungry.
+    Generates highly specific search queries for the hungry sections and adds discovered URLs to the pool.
+    """
+    new_urls_count = 0
+    for hid in hungry_heading_ids:
+        sec = next((s for s in pool.blueprint["sections"] if s["id"] == hid), None)
+        if not sec:
+            continue
+            
+        # Compile a targeted search query based on section instructions
+        query_prompt = f"""Generate 3 highly specific search engine queries targeting exact information for:
+        Section: "{sec['heading']}"
+        Instructions: "{sec.get('instructions', '')}"
+        
+        Return JSON list of strings: ["query 1", "query 2", "query 3"]"""
+        
+        try:
+            response = extractor._call_gemini(
+                contents=query_prompt,
+                config=extractor.types.GenerateContentConfig(temperature=0.2),
+                tier="cheap",
+                judgment=False
+            )
+            queries = extractor._parse_json_response(response.text)
+            if not queries:
+                continue
+                
+            from engine.scraper import ddg_search
+            for q in queries[:2]:
+                results = ddg_search(q, f"rediscover_{hid}")
+                for r in results:
+                    pool.add_source(
+                        url=r["url"],
+                        title=r.get("title", ""),
+                        snippet=r.get("snippet", ""),
+                        score=60.0,
+                        source_type=r.get("source_type", "web"),
+                        relevant_heading_ids=[hid],
+                        vector_id=f"rediscover_{hid}"
+                    )
+                    new_urls_count += 1
+        except Exception as e:
+            print(f"Adaptive rediscovery failed for {hid}: {e}")
+            
+    return new_urls_count
+```
+
+---
+
+### Phase 4: Blueprint-Aware Synthesis & Anti-Repetition
+
+#### 1. File to Modify: `engine/extractor.py` (Function: `extract_for_heading`, `synthesize_research_stream`)
+
+##### Design Objective:
+Synthesize content section-by-section using the blueprint's dynamic instructions rather than vector divisions. The prompt for each section is populated with the verbatim answers from the user's cross-questioning transcript to ensure compliance. The synthesizer is fed summaries of all previously written sections to prevent content repetition.
+
+##### Python Implementation:
+
+```python
+def extract_for_heading(section: dict, heading_content: list[dict], original_query: str) -> dict:
+    """
+    Concurrently extracts and cleans relevant facts for a single blueprint section
+    using accumulated source text.
+    """
+    if not heading_content:
+        return {"success": False, "data": {}, "sources": [], "error": "No content accumulated"}
+        
+    combined_texts = []
+    sources = []
+    images = []
+    
+    for item in heading_content:
+        url = item["url"]
+        content = item["content"]
+        src = item["source"]
+        imgs = item.get("images", [])
+        
+        if content:
+            combined_texts.append(f"--- Source: {url} ---\n{content[:5000]}")
+            sources.append(src)
+            for im in imgs:
+                if im not in images:
+                    images.append(im)
+                    
+    source_corpus = "\n\n".join(combined_texts)
+    
+    prompt = f"""You are a research analyst. Extract information that directly addresses the requirements of this report section.
+    
+    Report Section: "{section['heading']}"
+    Instructions: "{section.get('instructions', '')}"
+    Original Query Context: "{original_query}"
+    
+    Source Material:
+    {source_corpus[:25000]}
+    
+    Extract all facts, comparative details, and data points. Organize them cleanly.
+    Return JSON format: {{"data": {{"facts": ["fact A", "fact B"], "tables": [...]}}, "error": null}}
+    Return ONLY valid JSON."""
+
+    try:
+        response = extractor._call_gemini(
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(temperature=0.1),
+            tier="strong",
+            judgment=True
+        )
+        parsed = extractor._parse_json_response(response.text)
+        return {
+            "success": True,
+            "data": parsed.get("data") if parsed else {},
+            "sources": sources,
+            "images": images
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "sources": sources, "images": images}
+
+
+def synthesize_research_stream(
+    vectors_data: list,
+    original_query: str,
+    format_hint: str,
+    output_folder: str,
+    vectors: list,
+    instruction: str = "",
+    required_deliverables: list = []
+):
+    """
+    Iterates through blueprint sections, generating markdown content.
+    Enforces format rules (Mermaid flowcharts, tables, timelines) based on section types.
+    Avoids repetition by providing context from previous sections.
+    """
+    blueprint_path = os.path.join(output_folder, "blueprint.json")
+    if not os.path.exists(blueprint_path):
+        return
+        
+    with open(blueprint_path, "r", encoding="utf-8") as f:
+        blueprint = json.load(f)
+        
+    sections = blueprint.get("sections", [])
+    previous_sections_context = []
+    
+    # Load all heading drafts
+    from engine import session_output
+    drafts = session_output.load_heading_drafts(output_folder)
+    
+    # 1. Output Report Title & Meta
+    title = blueprint.get("document_title", "Research Report")
+    yield f"# {title}\n\n"
+    
+    # 2. Synthesize Sections Sequently
+    for sec in sections:
+        sid = sec["id"]
+        draft_data = drafts.get(sid, {})
+        section_data = draft_data.get("data", {})
+        section_images = draft_data.get("images", [])
+        
+        # Enforce Section Visual Types in prompt instructions
+        content_type = sec["content_type"]
+        format_instructions = ""
+        if content_type == "flowchart":
+            format_instructions = "You MUST construct a valid Mermaid.js flowchart (graph TD) illustrating this transaction/process flow."
+        elif content_type == "comparison_table":
+            format_instructions = "You MUST organize these parameters or competitors into a markdown comparison table with clear headings."
+        elif content_type == "timeline":
+            format_instructions = "You MUST construct a Mermaid.js timeline or Gantt chart illustrating this chronological roadmap."
+        elif content_type == "data_matrix":
+            format_instructions = "You MUST construct a structured markdown table matrix mapping parameters to entities."
+        
+        prompt = f"""You are a master technical writer. Write the content for this section of a research report.
+        
+        Section Title: "{sec['heading']}"
+        Sub-Headings to cover: {json.dumps(sec.get('sub_headings', []))}
+        Dynamic Instructions: "{sec.get('instructions', '')}"
+        
+        Verbatim Requirements (Expanded Prompt):
+        {instruction}
+        
+        Required Deliverables:
+        {json.dumps(required_deliverables)}
+        
+        Formatting Constraint:
+        {format_instructions}
+        
+        Source Facts Extracted:
+        {json.dumps(section_data)}
+        
+        Available Images to Embed (if any):
+        {json.dumps(section_images)}
+        
+        If images are available, embed the most relevant ones using markdown syntax: ![Description](image_url).
+        ONLY use the provided image URLs; never fabricate or guess image URLs.
+        
+        PREVENT REPETITION:
+        The following content has already been covered in previous sections. Do NOT duplicate this information:
+        {json.dumps(previous_sections_context)}
+        
+        Output section markdown content (headers, paragraphs, tables, or Mermaid blocks).
+        Do NOT wrap the section in code blocks. Write raw markdown."""
+
+        try:
+            response = extractor._call_gemini(
+                contents=prompt,
+                config=extractor.types.GenerateContentConfig(temperature=0.25),
+                tier="strong",
+                judgment=True
+            )
+            content = response.text.strip()
+            
+            # Save section summary to prevent repetition in subsequent sections
+            summary_prompt = f"Summarize in 2 sentences what was covered in this text:\n{content[:4000]}"
+            sum_resp = extractor._call_gemini(summary_prompt, tier="cheap")
+            previous_sections_context.append({
+                "heading": sec["heading"],
+                "summary": sum_resp.text.strip()
+            })
+            
+            yield f"\n\n## {sec['heading']}\n\n"
+            yield content
+            
+        except Exception as e:
+            yield f"\n\n## {sec['heading']}\n\nError generating section: {e}\n"
+```
+
+---
+
+### Phase 5: Premium Presentation Template Redesign
+
+To wow the user, the presentation layer must use polished, interactive components. The HTML report must load Mermaid diagrams dynamically, render tables with elegant grid systems, handle image loading failures gracefully, and prominently display the original query and verbatim cross-questioning transcript to guarantee all requirements were respected.
+
+#### 1. File to Modify/Overwrite: `templates/report_template.html`
+
+```html
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ title }}</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>
+  // Dynamic theme variables for Mermaid
+  function getMermaidTheme() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return {
+      theme: isDark ? 'dark' : 'default',
+      securityLevel: 'loose',
+      themeVariables: isDark ? {
+        background: '#111122',
+        primaryColor: '#6366f1',
+        primaryTextColor: '#f3f4f6',
+        lineColor: '#4f46e5'
+      } : {
+        background: '#f8fafc',
+        primaryColor: '#4f46e5',
+        primaryTextColor: '#1e293b',
+        lineColor: '#6366f1'
+      }
+    };
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    mermaid.initialize({ startOnLoad: true, ...getMermaidTheme() });
+    
+    // Smooth navigation TOC scroll spy
+    const links = document.querySelectorAll('.toc-item a');
+    const sections = document.querySelectorAll('section, header');
+    
+    window.addEventListener('scroll', () => {
+      let current = '';
+      sections.forEach(section => {
+        const sectionTop = section.offsetTop;
+        if (pageYOffset >= sectionTop - 150) {
+          current = section.getAttribute('id');
+        }
+      });
+      links.forEach(link => {
+        link.classList.remove('active');
+        if (link.getAttribute('href') === `#${current}`) {
+          link.classList.add('active');
+        }
+      });
+    });
+  });
+
+  // Switch dark/light themes dynamically
+  function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+    
+    // Re-render mermaid diagrams with new colors
+    setTimeout(() => {
+      const mermaidDivs = document.querySelectorAll('.mermaid');
+      mermaidDivs.forEach(div => {
+        // Force refresh SVG
+        const code = div.getAttribute('data-processed') ? div.textContent : div.innerHTML;
+        div.removeAttribute('data-processed');
+        div.innerHTML = code;
+      });
+      mermaid.initialize({ startOnLoad: true, ...getMermaidTheme() });
+      mermaid.init();
+    }, 100);
+  }
+</script>
+<style>
+  :root[data-theme="dark"] {
+    --bg-main: hsl(230, 25%, 8%);
+    --bg-card: hsla(230, 20%, 15%, 0.6);
+    --border-color: hsla(235, 100%, 75%, 0.15);
+    --accent: hsl(235, 100%, 72%);
+    --accent-glow: hsla(235, 100%, 72%, 0.3);
+    --text-primary: hsl(220, 15%, 95%);
+    --text-secondary: hsl(220, 10%, 70%);
+    --table-header-bg: hsla(235, 100%, 72%, 0.15);
+    --code-bg: hsl(230, 20%, 12%);
+    --shadow: 0 12px 40px -10px rgba(0, 0, 0, 0.7);
+  }
+  
+  :root[data-theme="light"] {
+    --bg-main: hsl(220, 15%, 98%);
+    --bg-card: hsla(220, 20%, 100%, 0.85);
+    --border-color: hsla(235, 75%, 50%, 0.1);
+    --accent: hsl(235, 75%, 55%);
+    --accent-glow: hsla(235, 75%, 55%, 0.15);
+    --text-primary: hsl(220, 20%, 15%);
+    --text-secondary: hsl(220, 15%, 45%);
+    --table-header-bg: hsla(235, 75%, 55%, 0.1);
+    --code-bg: hsl(220, 15%, 93%);
+    --shadow: 0 12px 30px -10px rgba(99, 102, 241, 0.1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+    line-height: 1.65;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 2rem;
+    padding: 2rem;
+  }
+
+  /* Sticky Sidebar Left */
+  .sidebar {
+    position: sticky;
+    top: 2rem;
+    height: calc(100vh - 4rem);
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 1.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    overflow-y: auto;
+    box-shadow: var(--shadow);
+  }
+
+  .sidebar h3 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.2rem;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 0.5rem;
+  }
+
+  .toc-list { list-style: none; display: flex; flex-direction: column; gap: 0.8rem; }
+  .toc-item a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    display: block;
+    border-left: 2px solid transparent;
+    padding-left: 10px;
+  }
+  .toc-item a:hover, .toc-item a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    padding-left: 14px;
+  }
+
+  .theme-btn {
+    margin-top: auto;
+    padding: 0.75rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: opacity 0.2s;
+  }
+  .theme-btn:hover { opacity: 0.9; }
+
+  /* Main Report Right */
+  main { min-width: 0; }
+
+  .report-header {
+    background: linear-gradient(135deg, var(--accent-glow) 0%, transparent 100%);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 3rem;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+
+  h1 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 2.8rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    line-height: 1.2;
+    background: linear-gradient(to right, var(--text-primary), var(--accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .meta {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 2rem;
+  }
+
+  /* Scope & Answers Transcript Box (Compliance Panel) */
+  .compliance-panel {
+    background: var(--bg-card);
+    border: 1px dashed var(--accent);
+    border-radius: 16px;
+    padding: 1.8rem;
+    margin-bottom: 2.5rem;
+    box-shadow: var(--shadow);
+  }
+  .compliance-panel summary {
+    cursor: pointer;
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: var(--accent);
+  }
+  .compliance-content {
+    margin-top: 1.2rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+  }
+  .transcript-item {
+    margin-bottom: 1rem;
+  }
+  .transcript-q {
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .transcript-a {
+    color: var(--text-secondary);
+    background: var(--code-bg);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    margin-top: 0.25rem;
+  }
+
+  /* Sections */
+  .section-card {
+    background: var(--bg-card);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 2.5rem;
+    margin-bottom: 2.5rem;
+    box-shadow: var(--shadow);
+  }
+
+  h2 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.8rem;
+    margin-bottom: 1.5rem;
+    border-left: 5px solid var(--accent);
+    padding-left: 0.8rem;
+  }
+
+  p { margin-bottom: 1.2rem; color: var(--text-primary); font-size: 1rem; }
+  ul, ol { margin-bottom: 1.2rem; padding-left: 1.8rem; }
+  li { margin-bottom: 0.6rem; color: var(--text-primary); }
+
+  /* Premium Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.8rem 0;
+    font-size: 0.95rem;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow);
+  }
+  th, td { padding: 1rem 1.2rem; text-align: left; }
+  th {
+    background-color: var(--table-header-bg);
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+  }
+  tr { border-bottom: 1px solid var(--border-color); }
+  tr:nth-child(even) { background-color: rgba(255, 255, 255, 0.02); }
+  tr:hover { background-color: rgba(255, 255, 255, 0.04); }
+
+  /* Mermaid Diagrams Container */
+  .mermaid {
+    background: #111122 !important;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 2rem;
+    margin: 2rem 0;
+    display: flex;
+    justify-content: center;
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+
+  /* Polished Image Embedding with Fallbacks */
+  .image-wrapper {
+    position: relative;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+    margin: 2rem 0;
+    box-shadow: var(--shadow);
+  }
+  .report-img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .image-fallback {
+    display: none;
+    padding: 2rem;
+    background: var(--code-bg);
+    text-align: center;
+    color: var(--text-secondary);
+  }
+  .image-fallback a { color: var(--accent); font-weight: 600; }
+  
+  /* Show fallback if image errors out */
+  .report-img:error, .report-img-failed { display: none; }
+  .report-img-failed + .image-fallback { display: block; }
+
+  @media (max-width: 1024px) {
+    .container { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <aside class="sidebar">
+    <h3>Contents</h3>
+    <ul class="toc-list">
+      <li class="toc-item"><a href="#compliance" class="active">Scope Transcript</a></li>
+      {% if executive_summary %}
+      <li class="toc-item"><a href="#executive-summary">Executive Summary</a></li>
+      {% endif %}
+      {% for section in sections %}
+      <li class="toc-item"><a href="#sec-{{ loop.index }}">{{ section.title }}</a></li>
+      {% endfor %}
+      {% if sources %}
+      <li class="toc-item"><a href="#sources">Sources</a></li>
+      {% endif %}
+    </ul>
+    <button class="theme-btn" onclick="toggleTheme()">🌓 Switch Theme</button>
+  </aside>
+
+  <main>
+    <header id="compliance" class="report-header">
+      <h1>{{ title }}</h1>
+      <div class="meta">
+        <span>🗓️ {{ generated_at }}</span>
+        <span>🆔 Session: {{ session_id }}</span>
+      </div>
+    </header>
+
+    <!-- Verbatim Clarifications Panel -->
+    <details class="compliance-panel" open>
+      <summary>🔍 Scope & Clarifications Transcript (Verbatim Compliance)</summary>
+      <div class="compliance-content">
+        <div class="transcript-item">
+          <p class="transcript-q">Original User Query:</p>
+          <div class="transcript-a">{{ original_query }}</div>
+        </div>
+        {% if clarification_answers %}
+        {% for ans in clarification_answers %}
+        <div class="transcript-item">
+          <p class="transcript-q">Clarification Q: {{ ans.question }}</p>
+          <div class="transcript-a">A: {{ ans.answer }}</div>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+    </details>
+
+    {% if executive_summary %}
+    <section id="executive-summary" class="section-card">
+      <h2>Executive Summary</h2>
+      <p>{{ executive_summary }}</p>
+    </section>
+    {% endif %}
+
+    <!-- Report Sections -->
+    {% for section in sections %}
+    <section id="sec-{{ loop.index }}" class="section-card">
+      <h2>{{ section.title }}</h2>
+      <div>
+        {{ section.body | safe }}
+      </div>
+    </section>
+    {% endfor %}
+
+    <!-- Sources & References -->
+    {% if sources %}
+    <section id="sources" class="section-card">
+      <h2>Sources & References</h2>
+      <ol style="padding-left: 1.5rem;">
+        {% for src in sources %}
+        <li style="margin-bottom: 0.8rem;">
+          {% if src.url %}
+          <a href="{{ src.url }}" target="_blank" style="color: var(--accent); font-weight: 500;">{{ src.title }}</a>
+          {% else %}
+          {{ src.title }}
+          {% endif %}
+          <span style="color: var(--text-secondary); font-size: 0.88rem;">— {{ src.domain }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+    {% endif %}
+  </main>
+</div>
+
+<script>
+  // Image error handling callback
+  document.querySelectorAll('.report-img').forEach(img => {
+    img.addEventListener('error', function() {
+      this.classList.add('report-img-failed');
+      const srcUrl = this.getAttribute('src');
+      let domain = "";
+      try {
+        domain = new URL(srcUrl).hostname;
+      } catch (e) {
+        domain = "Source Website";
+      }
+      const fallbackDiv = this.nextElementSibling;
+      if (fallbackDiv && fallbackDiv.classList.contains('image-fallback')) {
+        fallbackDiv.innerHTML = `🖼️ <strong>Image failed to load</strong><br><small>Source domain: ${domain}</small><br><a href="${srcUrl}" target="_blank">View original page image</a>`;
+      }
+    });
+  });
+</script>
+</body>
+</html>
+```
+
+#### 2. File to Modify: `present.py` (Markdown Parsers)
+
+Ensure that:
+1. `_md_to_html` (or the `markdown` third-party module) correctly processes code blocks with class `language-mermaid` and translates them to `<div class="mermaid">` tags.
+2. It detects images in the markdown `![alt](url)` and wraps them in `<div class="image-wrapper"><img class="report-img" src="url" alt="alt"/><div class="image-fallback"></div></div>`.
+3. Validates against placeholder leaks.
+
+##### Python Implementation:
+
+```python
+def _md_to_html_enhanced(md_text: str) -> str:
+    """
+    Enhanced basic parser converting markdown elements, handling custom Mermaid divs
+    and wrapper structures for images.
+    """
+    if _HAVE_MD:
+        import markdown as _md
+        # Basic markdown conversion
+        html = _md.markdown(md_text, extensions=["tables", "fenced_code"])
+    else:
+        html = _md_to_html(md_text) # Fallback basic parser
+
+    # Post-process to translate code block tag structures to Mermaid divs
+    html = re.sub(
+        r'<pre><code class="language-mermaid">(.*?)</code></pre>',
+        r'<div class="mermaid">\1</div>',
+        html,
+        flags=re.DOTALL
+    )
+    
+    # Translate standard markdown images to premium wrappers with fallbacks
+    html = re.sub(
+        r'<img alt="(.*?)" src="(.*?)"[^>]*>',
+        r'<div class="image-wrapper"><img class="report-img" src="\2" alt="\1"/><div class="image-fallback"></div></div>',
+        html
+    )
+    
+    return html
+```
+
+---
+
+## 🔬 Verification & Quality Gate Plan
+
+### 1. Automated Tests
+
+Run the following validation commands on completion of code edits:
+
+*   **Prompt Expansion Validation Test:**
+    Execute `python scratch/test_reforms.py` using `Ques.txt` inputs. Inspect the generated output state `01_search_parameters.md`. Confirm:
+    1. The verbatim questions from `Ques.txt` are printed under the Q&A transcripts section.
+    2. The original query is fully intact.
+    3. The size of the `refined_prompt` string exceeds 1000 characters and incorporates all details.
+
+*   **Structure & Visuals Rendering Check:**
+    Execute `python present.py outputs/<run_folder>`. Verify that `report.html` was generated. Open the HTML file and confirm:
+    1. Mermaid diagrams do not show unrendered tags or code blocks.
+    2. Tables have zebra styling.
+    3. The Toggle Theme button successfully toggles background colors and triggers Mermaid theme reinitialization.
+    4. Image tags carry `<div class="image-wrapper">` parent containers.
+
+*   **Quality Gates Check:**
+    Run the leak tests in `present.py` to assert that no Jinja placeholders or forbidden strings (`[Insert Company]`, `TODO`, `N/A`) were output.
+
+### 2. Manual Verification
+
+*   Open the report in a web browser. Inspect the collapsible panel "Scope & Clarifications Transcript" to verify that cross-questioning inputs are displayed accurately.
+*   Validate responsiveness: Shrink the viewport to ensure the layout moves to single column and hides the left sidebar navigation menu.

@@ -1,0 +1,21 @@
+-->Difference in 3PL and Payment gateways, who provides what? how much we need to rely on 3PL companies and how much on Payment gateways?
+-->Analyse competitors in product, service and see how their escrow mechanism is designed
+--> requirements for setting up escrow
+	Gateway api, 3PL webhook, requirements from silaai platform
+
+I need to give a research work about escrow and escrow integration for a clothing startup based in India.
+We are a startup that provides a platform for clothing designers to sell their clothes to customers. We have 2 types of business involved 1. selling product ( time delivary and return incase user dont want it) and  2.Service (Multiple retuns involved for rework or for changes in clothing and if customer dont like it then return and money is sent back)
+We are planning to integrate escrow for ease of doing business as we need to handle multiple transactions (initially customer pays then in product it is fairly simple i.e. if customer recieves and keeps it process payment to seller after deducting our share and delivary fee if delivary done through us , if not return product and pay customer back after cutting delivary fee , but in service if customer likes it in 1st delivary just pay but if not then 
+he asks for rework and then it is taken back and tailor do those changes and then sends back then if again same thing repeats   like that and if customer dont like the final product then the amount is refunded back to the customer after cutting delivary fee and product is returned back to the seller.) .
+So I need these ways to be figured our what our competitors do to streamline this process and what we  should do . also what methods / checkpoints patterns should we follow in these different cases we have also list all possible methods we can use and whast is best among them. Map out the different milestones for the types of transactions which act as triggers in the escrow mechanism.
+also answer these ques.
+1. What is escrow and how does it work?
+2. What are the different types of escrow?
+3. How does escrow work in the context of a clothing startup based in India?
+4. What are the different types of escrow integration for a clothing startup in India?
+5. How does escrow integration work in the context of a clothing startup based in India?
+also list all the risk and disputes involed or that might be involved in this process / in our operations
+also I have seen 3pl player and payment gateways bot give this service , how much on who should we rely , also what to do in cod situation
+Make it crisp, structured, and easy to understand.
+Use tables and flowcharts to explain complex concepts.
+Include examples and case studies where appropriate.
