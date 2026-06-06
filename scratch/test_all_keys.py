@@ -16,7 +16,7 @@ def load_keys():
 keys = load_keys()
 print(f"Loaded {len(keys)} keys from api_keys.txt")
 
-models_to_test = ["gemini-2.0-flash", "gemini-2.5-flash-lite"]
+models_to_test = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 for idx, key in enumerate(keys, 1):
     print(f"\n--- Testing Key #{idx}: {key[:10]}...{key[-5:]} ---")

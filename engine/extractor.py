@@ -195,10 +195,9 @@ def _call_gemini(contents: str, config=None, tier: str = "cheap", judgment: bool
                 if is_rate_limit:
                     is_hard_quota = any(x in error_str for x in ["limit: 0", "exceeded your current quota", "quota exceeded", "daily limit"])
                     if is_hard_quota:
-                        print(f"    [!] Hard quota limit hit for cell ({key_idx + 1}, {active_tier}) using {model_name}. Marking all tiers for Key #{key_idx + 1} as exhausted.")
+                        print(f"    [!] Hard quota limit hit for cell ({key_idx + 1}, {active_tier}) using {model_name}. Marking active tier {active_tier} for Key #{key_idx + 1} as exhausted.")
                         with _rotation_lock:
-                            for t in ["strong", "mid", "cheap"]:
-                                _cell_states[(key_idx, t)]["exhausted_today"] = True
+                            _cell_states[(key_idx, active_tier)]["exhausted_today"] = True
                         break  # Break model loop to try the next key/cell
                     else:
                         cooldown_sec = _parse_cooldown_from_error(error_str)
@@ -257,8 +256,7 @@ IMPORTANT: Return your findings as valid JSON with this structure:
     "notes": "any caveats or limitations"
 }}
 
-Be thorough. Include ALL data points you can find. Use consistent units and formats appropriate to the subject matter.
-Return ONLY the JSON, no other text or markdown fences."""
+Be thorough. Include ALL data points you can find. Use consistent units and formats appropriate to the subject matter."""
 
     try:
         try:
@@ -280,6 +278,7 @@ Return ONLY the JSON, no other text or markdown fences."""
                     contents=full_prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.2,
+                        response_mime_type="application/json"
                     ),
                     tier="strong",
                     judgment=True
@@ -367,7 +366,10 @@ def extract(content: str, instruction: str, schema_hint: str = None) -> dict:
     try:
         response = _call_gemini(
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.1),
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json"
+            ),
             tier="mid",
             judgment=False
         )
@@ -404,12 +406,15 @@ Deprioritize: news articles, blogs without data, forums, social media.
 Search Results:
 {results_text}
 
-Return ONLY a JSON array: [{{"index": 1, "score": 85, "reasoning": "..."}}]"""
+Return a JSON array: [{{"index": 1, "score": 85, "reasoning": "..."}}]"""
     
     try:
         response = _call_gemini(
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.1),
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json"
+            ),
             tier="strong",
             judgment=True
         )
@@ -446,13 +451,15 @@ Goal: {instruction}
 Data:
 {sources_text}
 
-Return JSON: {{"merged_data": [...], "summary": "...", "conflicts": [...], "sources_used": N}}
-Return ONLY valid JSON."""
+Return JSON: {{"merged_data": [...], "summary": "...", "conflicts": [...], "sources_used": N}}"""
     
     try:
         response = _call_gemini(
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.1),
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json"
+            ),
             tier="mid",
             judgment=False
         )
@@ -474,7 +481,7 @@ TASK: {instruction}
 {schema_part}
 
 RULES:
-1. Return ONLY valid JSON, no explanations, no markdown code fences
+1. Return valid JSON
 2. If data is not found, return: {{"found": false, "reason": "explanation"}}
 3. Include ALL relevant data points
 4. Use consistent units and formats appropriate to the subject matter
@@ -838,150 +845,68 @@ Return ONLY valid JSON. No markdown code blocks, no other text."""
             sec_md = f"## {idx}. {heading}\n\n{section_content}\n\n"
             yield sec_md
             continue
-            
         draft_data = payload["data"]
         
-        # Scraped images
-        scraped_imgs = []
-        for src in payload.get("sources", []):
-            if isinstance(src, dict) and "images" in src:
-                scraped_imgs.extend(src["images"])
-                
-        images_context = ""
-        if scraped_imgs:
-            images_context = f"\nScraped webpage images that you can embed in your section using standard markdown `![alt](url)`:\n" + json.dumps(scraped_imgs, indent=2)
-
-        # Build prompt based on content type
-        content_type_prompt = ""
-        if content_type == "flowchart":
-            content_type_prompt = """The content of this section MUST primarily consist of a detailed Mermaid flowchart showing the process flow, payment workflow, or logic triggers.
-            Format the flowchart inside a markdown mermaid block:
-            ```mermaid
-            graph TD
-                A[Start] --> B[Step 1]
-            ```
-            Explain the flowchart steps briefly (1-2 sentences per step)."""
-        elif content_type == "narrative_with_flowchart":
-            content_type_prompt = """This section needs both a detailed narrative analysis (2-3 paragraphs) AND a Mermaid flowchart block showing the associated process/payment flow.
-            Format the flowchart inside a markdown mermaid block:
-            ```mermaid
-            graph TD
-                A[Start] --> B[Step 1]
-            ```"""
-        elif content_type == "comparison_table":
-            content_type_prompt = """The content of this section MUST contain a detailed markdown comparison table comparing the platforms/competitors/features.
-            Format the table in markdown:
-            | Parameter | Platform A | Platform B |
-            |---|---|---|"""
-        elif content_type == "timeline":
-            content_type_prompt = """The content of this section MUST contain a chronological timeline or rollout milestones roadmap.
-            Use a Mermaid timeline or gantt chart block if appropriate, or a detailed numbered list with milestones.
-            Format the timeline inside a markdown mermaid block if using mermaid:
-            ```mermaid
-            gantt
-                title Integration Roadmap
-            ```"""
-        elif content_type == "data_matrix":
-            content_type_prompt = """This section must include a detailed data parameter matrix (a structured comparison table showing specific pricing rates, commissions, API limits, or compliance limits)."""
+        # Check if we have the new direct analyst output structure
+        if isinstance(draft_data, dict) and "content" in draft_data:
+            section_title = draft_data.get("title", heading)
+            section_content = draft_data.get("content", "")
+            section_data = draft_data.get("data")
+            key_findings = draft_data.get("key_findings", [])
+            viz_hint = draft_data.get("visualization_hint", "bullets")
+            
+            # Format and append conflicts warnings if present
+            conflicts = draft_data.get("conflicts", [])
+            conflicts_md = ""
+            if conflicts:
+                conflicts_md = "\n\n### Data Conflict Warnings\n"
+                for conf in conflicts:
+                    param = conf.get("parameter", "Unknown Parameter")
+                    conflicts_md += f"\n> [!WARNING]\n> **Data Conflict Warning: {param} Discrepancy**\n"
+                    for detail in conf.get("details", []):
+                        conflicts_md += f"> - {detail.get('url') or 'Unknown source'}: **{detail.get('raw_value')}**\n"
+                section_content += conflicts_md
         else:
-            content_type_prompt = """Write a rich, detailed, professional narrative analysis (3-5 paragraphs) supported by bulleted details."""
-
-        # Enforce Anti-Repetition
-        anti_repetition_context = ""
-        if previous_sections_context:
-            anti_repetition_context = "\nALREADY COVERED in previous sections (DO NOT REPEAT or duplicate these points):\n" + "\n".join([f"- {item['title']}: {item['summary']}" for item in previous_sections_context])
-
-        section_prompt = f"""You are a master market analyst writing a specific section of a market research report.
-Original User Query: "{original_query}"
-Report Section Title: "{heading}"
-Expected Format/Content Type: "{content_type}"
-Section instructions: "{instructions}"
-{deliverables_text}
-{content_type_prompt}
-{anti_repetition_context}
-
-Master Expanded Research Prompt & Verbatim Answers Transcript (CRITICAL INSTRUCTIONS & CONSTRAINTS):
-{instruction}
-
-Extracted Factual Data from Sources:
-{json.dumps(draft_data, indent=2)}
-
-Sources used:
-{json.dumps(payload.get("sources"), indent=2)}
-{images_context}
-
-RULES:
-1. Write a professional, comprehensive, and highly detailed section following the format guidelines. Use all available factual rates, parameters, and workflows.
-2. Under "content", provide the complete markdown content. If the content type requests a Mermaid chart or a comparison table, you MUST write the full Mermaid code block or markdown table directly inside the "content" string. Do not leave placeholders.
-3. If images are provided, embed the most relevant 1-2 images in the markdown content using standard markdown `![alt text](url)`.
-4. Output your response as a valid JSON object matching this schema:
-{{
-  "title": "Title of the section (e.g. '{heading}')",
-  "content": "Detailed markdown content for the section. Include narrative paragraphs, bullet lists, markdown tables, or Mermaid code blocks as requested.",
-  "data": [
-    {{"column1": "val1", "column2": "val2"}}
-  ], // Optional: structured tabular data. Set to null if no tabular data.
-  "key_findings": ["Key finding bullet 1", "Key finding bullet 2"],
-  "summary": "A 1-sentence summary of this section's core findings for anti-repetition context.",
-  "visualization_hint": "table|chart|flowchart|timeline|bullets"
-}}
-Return ONLY the valid JSON object. No explanations, no markdown fences outside the JSON."""
-
-        try:
-            response = _call_gemini(
-                contents=section_prompt,
-                tier="strong",
-                judgment=True,
-                config=types.GenerateContentConfig(
-                    temperature=0.15,
-                    response_mime_type="application/json"
-                )
-            )
-            parsed = _parse_json_response(response.text)
-            if parsed and isinstance(parsed, dict):
-                section_title = parsed.get("title", heading)
-                section_content = parsed.get("content", "")
-                section_data = parsed.get("data")
-                key_findings = parsed.get("key_findings", [])
-                viz_hint = parsed.get("visualization_hint", "bullets")
-                
-                section_obj = {
-                    "title": section_title,
-                    "content": section_content,
-                    "data": section_data,
-                    "key_findings": key_findings,
-                    "visualization_hint": viz_hint
-                }
-                sections.append(section_obj)
-                
-                # Keep summary for anti-repetition context
-                previous_sections_context.append({
-                    "title": section_title,
-                    "summary": parsed.get("summary", heading)
-                })
-                
-                # Format section to markdown and stream
-                sec_md = f"## {idx}. {section_title}\n\n{section_content}\n\n"
-                if key_findings:
-                    sec_md += "### Key Findings\n"
-                    for kf in key_findings:
-                        sec_md += f"- {kf}\n"
-                    sec_md += "\n"
-                yield sec_md
+            # Fallback for old draft structures
+            section_title = heading
+            viz_hint = "bullets"
+            section_data = None
+            key_findings = draft_data.get("consolidated_findings", []) if isinstance(draft_data, dict) else []
+            section_content = ""
+            if isinstance(draft_data, dict):
+                if draft_data.get("workflows"):
+                    section_content += "### Extracted Workflows\n" + "\n".join([f"- {w}" for w in draft_data.get("workflows", [])]) + "\n\n"
+                if draft_data.get("timelines"):
+                    section_content += "### Extracted Timelines\n" + "\n".join([f"- {t}" for t in draft_data.get("timelines", [])]) + "\n\n"
+                if not section_content:
+                    section_content = "*Factual data extracted. See key findings below.*"
             else:
-                raise ValueError("Parsed result was not a dictionary")
-        except Exception as e:
-            print(f"Failed to synthesize section for {heading}: {e}")
-            section_content = "*AI synthesis failed for this section. Direct extraction output shown.*"
-            section_obj = {
-                "title": heading,
-                "content": section_content,
-                "data": draft_data,
-                "key_findings": [],
-                "visualization_hint": "table",
-            }
-            sections.append(section_obj)
-            yield f"## {idx}. {heading}\n\n{section_content}\n\n"
+                section_content = str(draft_data)
+                
+        section_obj = {
+            "title": section_title,
+            "content": section_content,
+            "data": section_data,
+            "key_findings": key_findings,
+            "visualization_hint": viz_hint
+        }
+        sections.append(section_obj)
+        
+        # Keep summary for anti-repetition context
+        summary_text = draft_data.get("summary", heading) if isinstance(draft_data, dict) else heading
+        previous_sections_context.append({
+            "title": section_title,
+            "summary": summary_text
+        })
+        
+        # Format section to markdown and stream
+        sec_md = f"## {idx}. {section_title}\n\n{section_content}\n\n"
+        if key_findings:
+            sec_md += "### Key Findings\n"
+            for kf in key_findings:
+                sec_md += f"- {kf}\n"
+            sec_md += "\n"
+        yield sec_md
 
     # Yield sources list at the end
     sources_md = "## Sources & References\n"
@@ -1032,14 +957,15 @@ Provide your findings in this structured JSON format:
     "timestamps": [
         {{"topic": "Brief topic name", "timestamp": "MM:SS or HH:MM:SS if available, or approximate section name", "description": "What was discussed here"}}
     ]
-}}
-
-Return ONLY valid JSON. No markdown code blocks, no explanations."""
+}}"""
 
     try:
         response = _call_gemini(
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.2),
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json"
+            ),
             tier="mid",
             judgment=False
         )
@@ -1112,13 +1038,15 @@ Rules:
 1. Make the requested modifications precisely.
 2. If the user asks to add or change details, recalculate or reformat the existing text/table values appropriately.
 3. If they ask to focus more on a certain aspect, rewrite the summary/narrative content accordingly.
-4. Keep all other sections/data intact if they are not affected by the request.
-5. Return ONLY the new valid JSON. Do not include markdown code blocks or explanations."""
+4. Keep all other sections/data intact if they are not affected by the request."""
 
     try:
         response = _call_gemini(
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.2),
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json"
+            ),
             tier="strong",
             judgment=True
         )

@@ -56,3 +56,12 @@ report*.csv
 *.sln
 *.swp
 *~
+
+# Log files and run metrics
+failures.jsonl
+
+# Node modules
+node_modules/
+**/node_modules/
+
+

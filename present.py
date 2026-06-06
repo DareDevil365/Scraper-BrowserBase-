@@ -57,6 +57,8 @@ try:
     from docx import Document
     from docx.shared import Pt, Inches, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls
     _HAVE_DOCX = True
 except Exception:
     _HAVE_DOCX = False
@@ -850,6 +852,86 @@ def render_docx(presentable: dict[str, Any], out_path: Path) -> bool:
         return False
         
     doc = Document()
+    
+    # Page Setup: 1 inch margins on all sides
+    for section in doc.sections:
+        section.top_margin = Inches(1)
+        section.bottom_margin = Inches(1)
+        section.left_margin = Inches(1)
+        section.right_margin = Inches(1)
+
+    # Document-wide Normal style (body text)
+    style_normal = doc.styles["Normal"]
+    style_normal.font.name = "Arial"
+    style_normal.font.size = Pt(11)
+    style_normal.font.color.rgb = RGBColor(0x33, 0x33, 0x33) # Off-black
+    style_normal.paragraph_format.line_spacing = 1.15
+    style_normal.paragraph_format.space_after = Pt(6)
+
+    # Heading 1 style
+    style_h1 = doc.styles["Heading 1"]
+    style_h1.font.name = "Arial"
+    style_h1.font.size = Pt(18)
+    style_h1.font.bold = True
+    style_h1.font.color.rgb = RGBColor(0x11, 0x18, 0x27) # Very dark gray
+    style_h1.paragraph_format.space_before = Pt(14)
+    style_h1.paragraph_format.space_after = Pt(6)
+
+    # Heading 2 style
+    style_h2 = doc.styles["Heading 2"]
+    style_h2.font.name = "Arial"
+    style_h2.font.size = Pt(14)
+    style_h2.font.bold = True
+    style_h2.font.color.rgb = RGBColor(0x37, 0x41, 0x51) # Dark gray
+    style_h2.paragraph_format.space_before = Pt(12)
+    style_h2.paragraph_format.space_after = Pt(4)
+
+    # Title style (Heading 0)
+    try:
+        style_title = doc.styles["Title"]
+        style_title.font.name = "Arial"
+        style_title.font.size = Pt(24)
+        style_title.font.bold = True
+        style_title.font.color.rgb = RGBColor(0x11, 0x18, 0x27)
+        style_title.paragraph_format.space_after = Pt(12)
+    except Exception:
+        pass
+
+    # Heading 3 style
+    try:
+        style_h3 = doc.styles["Heading 3"]
+        style_h3.font.name = "Arial"
+        style_h3.font.size = Pt(12)
+        style_h3.font.bold = True
+        style_h3.font.color.rgb = RGBColor(0x4B, 0x55, 0x63) # Medium gray
+        style_h3.paragraph_format.space_before = Pt(10)
+        style_h3.paragraph_format.space_after = Pt(4)
+    except Exception:
+        pass
+
+    # Heading 4 style
+    try:
+        style_h4 = doc.styles["Heading 4"]
+        style_h4.font.name = "Arial"
+        style_h4.font.size = Pt(11)
+        style_h4.font.bold = True
+        style_h4.font.italic = True
+        style_h4.font.color.rgb = RGBColor(0x6B, 0x72, 0x80) # Light-medium gray
+        style_h4.paragraph_format.space_before = Pt(8)
+        style_h4.paragraph_format.space_after = Pt(2)
+    except Exception:
+        pass
+
+    # List Bullet style
+    try:
+        style_bullet = doc.styles["List Bullet"]
+        style_bullet.font.name = "Arial"
+        style_bullet.font.size = Pt(11)
+        style_bullet.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+        style_bullet.paragraph_format.space_after = Pt(3)
+    except Exception:
+        pass
+    
     doc.add_heading(presentable["title"], level=0)
     
     meta = doc.add_paragraph()
@@ -867,7 +949,8 @@ def render_docx(presentable: dict[str, Any], out_path: Path) -> bool:
     exec_sum = presentable.get("executive_summary")
     if exec_sum:
         doc.add_heading("Executive Summary", level=1)
-        doc.add_paragraph(exec_sum)
+        p = doc.add_paragraph()
+        _add_formatted_text(p, exec_sum)
 
     # Key Takeaways
     takeaways = presentable.get("key_takeaways")
@@ -899,15 +982,16 @@ def render_docx(presentable: dict[str, Any], out_path: Path) -> bool:
                 continue
                 
             t = doc.add_table(rows=1, cols=len(headers))
-            t.style = "Light Grid Accent 1"
+            set_table_borders(t)
             for i, h in enumerate(headers):
-                t.rows[0].cells[i].text = h
+                format_cell(t.rows[0].cells[i], h, is_header=True)
                 
-            for row in rows:
+            for r_idx, row in enumerate(rows):
                 cells = t.add_row().cells
                 for i, val in enumerate(row):
                     if i < len(cells):
-                        cells[i].text = str(val or "")
+                        format_cell(cells[i], str(val or ""), is_header=False, row_idx=r_idx)
+            adjust_column_widths(t)
 
     # Coverage Gaps
     gaps = presentable.get("gaps", [])
@@ -921,16 +1005,17 @@ def render_docx(presentable: dict[str, Any], out_path: Path) -> bool:
     if sources:
         doc.add_heading("Sources & References", level=1)
         t = doc.add_table(rows=1, cols=3)
-        t.style = "Light Grid Accent 1"
-        t.rows[0].cells[0].text = "Source Title"
-        t.rows[0].cells[1].text = "Domain"
-        t.rows[0].cells[2].text = "URL"
+        set_table_borders(t)
+        format_cell(t.rows[0].cells[0], "Source Title", is_header=True)
+        format_cell(t.rows[0].cells[1], "Domain", is_header=True)
+        format_cell(t.rows[0].cells[2], "URL", is_header=True)
         
-        for s in sources:
+        for r_idx, s in enumerate(sources):
             c = t.add_row().cells
-            c[0].text = str(s.get("title") or "")
-            c[1].text = str(s.get("domain") or "")
-            c[2].text = str(s.get("url") or "")
+            format_cell(c[0], str(s.get("title") or ""), is_header=False, row_idx=r_idx)
+            format_cell(c[1], str(s.get("domain") or ""), is_header=False, row_idx=r_idx)
+            format_cell(c[2], str(s.get("url") or ""), is_header=False, row_idx=r_idx)
+        adjust_column_widths(t, [2.5, 1.5, 2.5])
 
     try:
         doc.save(str(out_path))
@@ -984,6 +1069,204 @@ def download_image_cached(url: str, media_dir: Path) -> Path | None:
         return None
 
 
+
+def set_cell_margins(cell, top=120, bottom=120, left=160, right=160):
+    """Set cell padding (dxa is 1/20 of a pt; top/bottom=6pt (120 dxa), left/right=8pt (160 dxa))"""
+    tcMar_xml = f'<w:tcMar {nsdecls("w")}><w:top w:w="{top}" w:type="dxa"/><w:bottom w:w="{bottom}" w:type="dxa"/><w:left w:w="{left}" w:type="dxa"/><w:right w:w="{right}" w:type="dxa"/></w:tcMar>'
+    cell._tc.get_or_add_tcPr().append(parse_xml(tcMar_xml))
+
+def set_cell_shading(cell, color_hex: str):
+    """Set cell background color shading (e.g. '1F2937' or 'F9FAFB')"""
+    shd_xml = f'<w:shd {nsdecls("w")} w:fill="{color_hex}"/>'
+    cell._tc.get_or_add_tcPr().append(parse_xml(shd_xml))
+
+def set_table_borders(table):
+    """Set table borders: no vertical borders, thin horizontal borders (#D1D5DB, #9CA3AF, #E5E7EB)"""
+    tblPr = table._tbl.tblPr
+    borders_xml = f'<w:tblBorders {nsdecls("w")}><w:top w:val="single" w:sz="4" w:space="0" w:color="D1D5DB"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="9CA3AF"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="E5E7EB"/><w:left w:val="none"/><w:right w:val="none"/><w:insideV w:val="none"/></w:tblBorders>'
+    tblPr.append(parse_xml(borders_xml))
+
+def format_cell(cell, text, is_header=False, row_idx=0):
+    # Set cell margins (6pt top/bottom, 8pt left/right)
+    set_cell_margins(cell, top=120, bottom=120, left=160, right=160)
+    
+    # Shade header cells with #1F2937, alternating row cells with #F9FAFB or #FFFFFF
+    if is_header:
+        set_cell_shading(cell, "1F2937")
+    else:
+        bg_color = "F9FAFB" if row_idx % 2 == 1 else "FFFFFF"
+        set_cell_shading(cell, bg_color)
+        
+    # Get cell paragraph
+    p = cell.paragraphs[0]
+    p.text = "" # Clear default text
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.15
+    
+    # Parse and add text
+    _add_formatted_text(p, text)
+    
+    # Enforce color and font-weight for header runs
+    for run in p.runs:
+        if is_header:
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+
+def adjust_column_widths(table, widths=None):
+    num_cols = len(table.columns)
+    if not widths:
+        # Default to equal distribution of 6.5 inches (printable area with 1" margins)
+        widths = [6.5 / num_cols] * num_cols
+        
+    for row in table.rows:
+        for idx, cell in enumerate(row.cells):
+            if idx < len(widths):
+                cell.width = Inches(widths[idx])
+
+
+def sanitize_line(line: str) -> str:
+    bracket_pairs = [
+        ("([", "])"),
+        ("[[", "]]"),
+        ("[(", ")]"),
+        ("((", "))"),
+        ("{{", "}}"),
+        ("[", "]"),
+        ("(", ")"),
+        ("{", "}"),
+        (">", "]")
+    ]
+    
+    pos = 0
+    result = []
+    
+    while pos < len(line):
+        best_match = None
+        best_match_start = -1
+        best_open = None
+        best_close = None
+        
+        for open_br, close_br in bracket_pairs:
+            pattern = r'\b([a-zA-Z0-9_-]+)\s*' + re.escape(open_br)
+            match = re.search(pattern, line[pos:])
+            if match:
+                start_idx = pos + match.start()
+                if best_match is None or start_idx < best_match_start:
+                    best_match = match
+                    best_match_start = start_idx
+                    best_open = open_br
+                    best_close = close_br
+                    
+        if best_match is None:
+            result.append(line[pos:])
+            break
+            
+        node_id = best_match.group(1)
+        open_br_pos = best_match_start + best_match.group(0).find(best_open)
+        
+        # Check if open_br_pos is inside quotes
+        prefix = line[:open_br_pos]
+        if prefix.count('"') % 2 == 1:
+            # Inside quotes! Skip past the opening bracket to avoid infinite loop
+            result.append(line[pos:open_br_pos + len(best_open)])
+            pos = open_br_pos + len(best_open)
+            continue
+            
+        label_start = open_br_pos + len(best_open)
+        close_pos = line.find(best_close, label_start)
+        if close_pos == -1:
+            result.append(line[pos:label_start])
+            pos = label_start
+            continue
+            
+        label = line[label_start:close_pos]
+        label_stripped = label.strip()
+        if label_stripped.startswith('"') and label_stripped.endswith('"'):
+            label_content = label_stripped[1:-1]
+        elif label_stripped.startswith("'") and label_stripped.endswith("'"):
+            label_content = label_stripped[1:-1]
+        else:
+            label_content = label_stripped
+            
+        clean_label = label_content.replace('"', "'").strip()
+        
+        result.append(line[pos:best_match_start])
+        result.append(f'{node_id}{best_open}"{clean_label}"{best_close}')
+        
+        pos = close_pos + len(best_close)
+        
+    return "".join(result)
+
+
+def sanitize_mermaid(code: str) -> str:
+    if not isinstance(code, str):
+        return code
+        
+    code_stripped = code.strip()
+    if code_stripped.startswith("gantt"):
+        return code.replace(" & ", " and ").replace("&", "and")
+        
+    if not (code_stripped.startswith("graph ") or code_stripped.startswith("flowchart ")):
+        return code
+
+    lines = code.splitlines()
+    sanitized_lines = [sanitize_line(line) for line in lines]
+    return "\n".join(sanitized_lines)
+
+
+def sanitize_all_mermaid_in_markdown(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    
+    # We want to find all ```mermaid ... ``` blocks and sanitize their contents
+    pattern = r'(```mermaid\s*\n)(.*?)(```)'
+    
+    def replacer(match):
+        prefix = match.group(1)
+        code = match.group(2)
+        suffix = match.group(3)
+        sanitized_code = sanitize_mermaid(code)
+        return f"{prefix}{sanitized_code}{suffix}"
+        
+    return re.sub(pattern, replacer, text, flags=re.DOTALL)
+
+
+def _add_formatted_text(paragraph, text: str):
+    """Parses inline markdown format elements (bold, italic, code, links) and appends runs to paragraph."""
+    # Split text into formatted parts and plain parts
+    pattern = re.compile(r'(\*\*.*?\*\*|__.*?__|\*.*?\*|`.*?`|\[.*?\]\(.*?\))')
+    parts = pattern.split(text)
+    for part in parts:
+        if not part:
+            continue
+        run = None
+        if part.startswith('**') and part.endswith('**'):
+            run = paragraph.add_run(part[2:-2])
+            run.bold = True
+        elif part.startswith('__') and part.endswith('__'):
+            run = paragraph.add_run(part[2:-2])
+            run.bold = True
+        elif part.startswith('*') and part.endswith('*'):
+            run = paragraph.add_run(part[1:-1])
+            run.italic = True
+        elif part.startswith('`') and part.endswith('`'):
+            run = paragraph.add_run(part[1:-1])
+            run.font.name = 'Courier New'
+            run.font.size = Pt(9.5)
+        elif part.startswith('[') and '](' in part and part.endswith(')'):
+            link_match = re.match(r'^\[(.*?)\]\((.*?)\)$', part)
+            if link_match:
+                link_text, link_url = link_match.groups()
+                run = paragraph.add_run(link_text)
+                run.underline = True
+                run.font.color.rgb = RGBColor(0x00, 0x00, 0xEE)
+        else:
+            run = paragraph.add_run(part)
+            
+        if run and not (part.startswith('`') and part.endswith('`')):
+            run.font.name = 'Arial'
+
+
 def _md_to_docx(doc, md_text: str, media_dir: Path | None = None):
     """Minimal markdown -> docx: headings, bullets, fenced code, tables, paragraphs, and images."""
     lines = md_text.splitlines()
@@ -1010,17 +1293,18 @@ def _md_to_docx(doc, md_text: str, media_dir: Path | None = None):
                 
             num_cols = len(headers)
             t = doc.add_table(rows=1, cols=num_cols)
-            t.style = "Light Grid Accent 1"
+            set_table_borders(t)
             
             for col_idx, h in enumerate(headers):
                 if col_idx < len(t.rows[0].cells):
-                    t.rows[0].cells[col_idx].text = h
+                    format_cell(t.rows[0].cells[col_idx], h, is_header=True)
                     
-            for r_data in rows:
+            for r_idx, r_data in enumerate(rows):
                 row_cells = t.add_row().cells
                 for col_idx, val in enumerate(r_data):
                     if col_idx < len(row_cells):
-                        row_cells[col_idx].text = val
+                        format_cell(row_cells[col_idx], val, is_header=False, row_idx=r_idx)
+            adjust_column_widths(t)
         table_lines = []
 
     for line in lines:
@@ -1051,7 +1335,9 @@ def _md_to_docx(doc, md_text: str, media_dir: Path | None = None):
             doc.add_heading(m.group(2).strip(), level=min(len(m.group(1)), 4))
             continue
         if re.match(r"^\s*[-*]\s+", line):
-            doc.add_paragraph(re.sub(r"^\s*[-*]\s+", "", line), style="List Bullet")
+            p = doc.add_paragraph(style="List Bullet")
+            clean_text = re.sub(r"^\s*[-*]\s+", "", line)
+            _add_formatted_text(p, clean_text)
             continue
         if line.strip():
             # Check if it is a standalone image
@@ -1073,7 +1359,8 @@ def _md_to_docx(doc, md_text: str, media_dir: Path | None = None):
                 p.add_run(url).italic = True
                 continue
                 
-            doc.add_paragraph(line.strip())
+            p = doc.add_paragraph()
+            _add_formatted_text(p, line.strip())
             
     if table_lines:
         flush_table()
@@ -1461,6 +1748,11 @@ def main(argv=None) -> int:
     # Run through presentation filter to build presentable allowlist payload
     import presentation_filter
     presentable = presentation_filter.build_presentable(payload, sources, config)
+
+    # Sanitize all Mermaid diagrams in markdown bodies
+    for p_sec in presentable.get("sections", []):
+        if "body" in p_sec:
+            p_sec["body"] = sanitize_all_mermaid_in_markdown(p_sec["body"])
 
     # Matplotlib chart rendering and embedding
     if not args.no_charts and _HAVE_MPL:

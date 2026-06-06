@@ -13,20 +13,23 @@ class SourcePool:
     URLs are tagged with ALL relevant blueprint heading IDs.
     Scraped content is accumulated per-heading.
     """
-    def __init__(self, blueprint: dict, output_folder: str):
+    def __init__(self, blueprint: dict, output_folder: str, vectors: list = None):
         self.queue = []            # list of (-score, url, entry_dict) for heapq
         self.scraped_cache = {}    # url -> content string
         self.extractions = {}      # url -> extraction dict
         self.heading_data = {}     # heading_id -> list of dicts: {"content": ..., "images": ..., "source": ..., "url": ...}
+        self.heading_facts = {}    # heading_id -> list of extracted fact dicts
         self.seen_urls = set()
         self.lock = threading.Lock()
         self.blueprint = blueprint
         self.output_folder = output_folder
+        self.vectors = vectors or []
 
         # Initialize heading data structures
         for sec in self.blueprint.get("sections", []):
             sid = sec["id"]
             self.heading_data[sid] = []
+            self.heading_facts[sid] = []
 
     def add_source(self, url: str, title: str, snippet: str, score: float, 
                    source_type: str, relevant_heading_ids: list[str], vector_id: str):
@@ -90,6 +93,20 @@ class SourcePool:
                     "url": url
                 })
 
+    def submit_extracted_facts(self, url: str, facts: list[dict], source_entry: dict):
+        """Distribute pre-extracted facts to their tagged headings."""
+        with self.lock:
+            for fact in facts:
+                for heading_id in fact.get("heading_ids", []):
+                    if heading_id not in self.heading_facts:
+                        self.heading_facts[heading_id] = []
+                    self.heading_facts[heading_id].append({
+                        "fact": fact.get("fact", ""),
+                        "data_point": fact.get("data_point"),
+                        "source_url": url,
+                        "source": source_entry
+                    })
+
     def submit_extraction(self, url: str, extraction: dict):
         """Submit structures/parameters extracted from a scraped page."""
         with self.lock:
@@ -98,11 +115,36 @@ class SourcePool:
     def get_heading_status(self, heading_id: str) -> str:
         """Check if a heading has enough successful scraped data sources."""
         data = self.heading_data.get(heading_id, [])
+        facts = self.heading_facts.get(heading_id, [])
         successful = [d for d in data if d.get("content") and len(d["content"]) > 100]
-        # High depth target: 4 sources. Low: 1-2.
-        if len(successful) >= 4:
+        fact_count = len(facts)
+        
+        # Determine satisfaction target based on vector priorities. Default = 4
+        target = 4
+        
+        # Check blueprint sections to map heading to vector priorities
+        section = next((s for s in self.blueprint.get("sections", []) if s["id"] == heading_id), None)
+        if section and self.vectors:
+            mapped_vector_ids = section.get("mapped_vector_ids", [])
+            priorities = []
+            for vid in mapped_vector_ids:
+                v_obj = next((v for v in self.vectors if v.get("id") == vid), None)
+                if v_obj:
+                    priorities.append(str(v_obj.get("priority", "medium")).lower())
+            
+            if priorities:
+                if "high" in priorities:
+                    target = 6
+                elif "medium" in priorities or "standard" in priorities:
+                    target = 4
+                else: # low priority
+                    target = 2
+                    
+        if fact_count >= 8:
             return "satisfied"
-        elif len(successful) >= 1:
+        if len(successful) >= target:
+            return "satisfied"
+        elif len(successful) >= 1 or fact_count >= 3:
             return "partial"
         return "hungry"
 
@@ -132,5 +174,6 @@ class SourcePool:
                     ]
                     for hid, items in self.heading_data.items()
                 },
+                "heading_facts": self.heading_facts,
                 "extractions": self.extractions
             }

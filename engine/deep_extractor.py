@@ -12,6 +12,7 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
 from engine import extractor, session_output
 from .scraper import fetch_page, _run_async
+from .text_filter import prune_boilerplate_chunks
 
 PERPLEXITY_API_KEY = ""
 PERPLEXITY_MODEL = "sonar"
@@ -209,6 +210,39 @@ def _detect_subject_owned_source(url: str, research_subject: str) -> bool:
             
     return False
 
+def is_youtube_video(url: str) -> bool:
+    """
+    Verifies if a YouTube URL points to a specific video or short,
+    and returns False for playlist pages, channel pages, user pages, handle pages, etc.
+    """
+    url_lower = url.lower()
+    if "youtube.com" not in url_lower and "youtu.be" not in url_lower:
+        return False
+        
+    # If it's a playlist URL but doesn't have a watch video ID
+    if "/playlist" in url_lower and "v=" not in url_lower:
+        return False
+        
+    # Channel/user landing page formats
+    if any(p in url_lower for p in ["/c/", "/channel/", "/user/", "/@"]):
+        # Ensure it's not a video url that happens to have channel name
+        if "v=" not in url_lower and "/shorts/" not in url_lower:
+            return False
+            
+    # Extract video ID
+    video_id = None
+    if "youtu.be" in url_lower:
+        match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
+        if match:
+            video_id = match.group(1)
+    else:
+        match = re.search(r'(?:v=|\/shorts\/|\/embed\/)([a-zA-Z0-9_-]{11})', url)
+        if match:
+            video_id = match.group(1)
+            
+    return video_id is not None and len(video_id) == 11
+
+
 def score_source_quality(url: str, title: str, snippet: str, research_subject: str = "", intent: str = "general", target_authority_domains: list = None) -> dict:
     """Scores a URL 0-100 based on domain authority, TLDs, and keyword relevance."""
     url_lower = url.lower()
@@ -222,10 +256,29 @@ def score_source_quality(url: str, title: str, snippet: str, research_subject: s
     domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url_lower)
     domain = domain_match.group(1) if domain_match else url_lower
     
-    # YouTube score boosting
+    # YouTube score boosting & Intent-Aware Scoring Model
     if "youtube.com" in domain or "youtu.be" in domain:
-        base_score = 70
-        detected_tier = "TIER_3"
+        if not is_youtube_video(url):
+            return {"score": 0, "tier": "Blocked", "label": "Blocked (non-video YouTube page)"}
+            
+        conceptual_kws = ["how to", "tutorial", "explain", "basics", "understanding", "what is", "walkthrough", "guide", "concept", "overview"]
+        pricing_kws = ["pricing", "rates", "rate card", "tariff", "cost", "fee", "fees", "price", "calculator"]
+        
+        check_text = f"{url_lower} {title_lower} {snippet_lower} {research_subject.lower()} {intent.lower()}".lower()
+        
+        is_conceptual = any(kw in check_text for kw in conceptual_kws)
+        is_pricing = any(kw in check_text for kw in pricing_kws)
+        
+        if is_conceptual and not is_pricing:
+            base_score = 85
+            detected_tier = "TIER_2"
+        elif is_pricing:
+            base_score = 50
+            detected_tier = "TIER_4"
+        else:
+            base_score = 70
+            detected_tier = "TIER_3"
+            
         found_tier = True
     else:
         base_score = 30
@@ -491,41 +544,67 @@ def discover_sources_duckduckgo(company: str, data_points: list[str]) -> list[di
 
 def classify_intent(query: str, context: str = "") -> str:
     """Classifies query intent to determine tier weights. Returns 'market', 'policy', 'sentiment', or 'general'."""
-    prompt = f"""Classify the research intent of this query: "{query}" (Context: "{context}").
-Choose exactly one category:
-- "market": Market sizing, forecasts, industry statistics, corporate pricing.
-- "policy": Policy, law, regulation, government guidelines.
-- "sentiment": User opinions, reviews, lived experience, customer satisfaction, forum discussions.
-- "general": Broad general information or technology comparison.
-Return ONLY the category name."""
-    try:
-        res = extractor._call_gemini(
-            contents=prompt,
-            tier="cheap",
-            judgment=False,
-            config=extractor.types.GenerateContentConfig(temperature=0.1)
-        )
-        category = res.text.strip().lower()
-        if category in ["market", "policy", "sentiment", "general"]:
-            return category
-    except Exception:
-        pass
+    q_str = str(query) if query is not None else ""
+    c_str = str(context) if context is not None else ""
+    text = (q_str + " " + c_str).lower()
+    
+    if any(k in text for k in ["review", "opinion", "complaint", "feedback", "user experience", "satisfied", "sentiment", "forum", "reddit", "trustpilot"]):
+        return "sentiment"
+        
+    if any(k in text for k in ["regulation", "policy", "law", "government", "rbi", "sebi", "compliance", "legal", "gst", "tax", "act", "rule"]):
+        return "policy"
+        
+    if any(k in text for k in ["pricing", "cost", "rate", "fee", "charge", "commission", "market size", "forecast", "revenue", "share", "competitor", "growth", "industry"]):
+        return "market"
+        
     return "general"
+
+
 
 
 def _check_relevance_overlap(src: dict, query: str) -> bool:
     """Quick keyword overlap check: is this source at least topically related to the query?"""
-    query_words = set(w.lower() for w in re.findall(r'\b\w{4,}\b', query)
-                      if w.lower() not in {'what', 'with', 'that', 'this', 'from', 'their',
-                                           'about', 'everything', 'there', 'between', 'which',
-                                           'have', 'been', 'will', 'does', 'more', 'than',
-                                           'also', 'into', 'some', 'very', 'each', 'when'})
+    synonyms_dict = {
+        "ai": ["artificial intelligence", "deep learning", "machine learning", "neural network"],
+        "ml": ["machine learning", "deep learning", "artificial intelligence"],
+        "cod": ["cash on delivery", "collect on delivery"],
+        "pod": ["pay on delivery", "proof of delivery"],
+        "kyc": ["know your customer", "identity verification", "compliance check"],
+        "rto": ["return to origin", "undelivered", "returned shipment"],
+        "api": ["application programming interface", "integration", "rest api", "sdk"],
+        "b2b": ["business to business", "enterprise", "wholesale"],
+        "b2c": ["business to consumer", "retail", "consumer"],
+    }
+    
+    raw_words = re.findall(r'\b\w{2,}\b', query.lower())
+    stop_words = {
+        'what', 'with', 'that', 'this', 'from', 'their', 'about', 'everything', 
+        'there', 'between', 'which', 'have', 'been', 'will', 'does', 'more', 
+        'than', 'also', 'into', 'some', 'very', 'each', 'when', 'your', 'under', 
+        'over', 'onto', 'down', 'then', 'here', 'is', 'am', 'are', 'was', 'were', 
+        'be', 'being', 'has', 'had', 'having', 'do', 'did', 'doing', 'a', 'an', 
+        'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of', 
+        'at', 'by', 'for', 'against', 'through', 'during', 'before', 'after', 
+        'above', 'below', 'to', 'up', 'out', 'on', 'off', 'again', 'further', 'once'
+    }
+    
+    query_words = set(w for w in raw_words if w not in stop_words)
     if not query_words:
         return True  # can't check, let it through
+        
     src_text = f"{src.get('title', '')} {src.get('snippet', '')} {src.get('url', '')}".lower()
-    matches = sum(1 for w in query_words if w in src_text)
-    # Require at least 1 query keyword present in title/snippet/url
-    return matches >= 1
+    
+    for w in query_words:
+        if w in src_text:
+            return True
+        # Check synonyms
+        syns = synonyms_dict.get(w, [])
+        for syn in syns:
+            if syn in src_text:
+                return True
+                
+    return False
+
 
 
 def _is_predefined_domain(url: str, target_authority_domains: list = None) -> bool:
@@ -746,46 +825,49 @@ def apply_diversity_and_anti_echo_chamber(sources: list[dict], domain_cap: int =
 
 def route_urls_to_headings(urls: list[dict], sections: list[dict]) -> dict:
     """
-    Given discovered URLs and blueprint sections, use AI to classify
-    which headings each URL can serve. One URL can serve multiple headings.
+    Given discovered URLs and blueprint sections, use keyword-overlap matching
+    to classify which headings each URL can serve. One URL can serve multiple headings.
     """
     if not urls or not sections:
         return {}
         
-    prompt = f"""Given the following list of discovered URLs (with their titles and search snippets) and a list of blueprint section headings for a research report, classify which headings each URL is relevant to and can provide data for.
-    A single URL can be relevant to MULTIPLE headings. If a URL is not relevant to any heading, map it to an empty list.
+    url_to_headings = {}
+    stop_words = {
+        'what', 'with', 'that', 'this', 'from', 'their', 'about', 'everything', 
+        'there', 'between', 'which', 'have', 'been', 'will', 'does', 'more', 
+        'than', 'also', 'into', 'some', 'very', 'each', 'when', 'your', 'under', 
+        'over', 'onto', 'down', 'then', 'here', 'is', 'am', 'are', 'was', 'were', 
+        'be', 'being', 'has', 'had', 'having', 'do', 'did', 'doing', 'a', 'an', 
+        'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of', 
+        'at', 'by', 'for', 'against', 'through', 'during', 'before', 'after', 
+        'above', 'below', 'to', 'up', 'out', 'on', 'off', 'again', 'further', 'once'
+    }
     
-    Discovered URLs:
-    {json.dumps([{"url": u["url"], "title": u.get("title", ""), "snippet": u.get("snippet", "")} for u in urls], indent=2)}
-    
-    Report Section Headings:
-    {json.dumps([{"id": s["id"], "heading": s["heading"], "instructions": s.get("instructions", "")} for s in sections], indent=2)}
-    
-    Output a JSON object with a single key "url_to_headings" mapping each URL to an array of matching section IDs.
-    Example:
-    {{
-      "url_to_headings": {{
-        "https://example.com/pricing": ["sec_pricing", "sec_competitors"],
-        "https://example.com/docs": ["sec_milestones"]
-      }}
-    }}
-    
-    Return ONLY valid JSON. No markdown formatting blocks or explanations."""
+    for u in urls:
+        url_text = f"{u.get('title', '')} {u.get('snippet', '')} {u.get('url', '')}".lower()
+        url_words = set(re.findall(r'\b\w{2,}\b', url_text))
+        
+        matched_sections = []
+        for sec in sections:
+            sec_id = sec["id"]
+            heading = sec["heading"]
+            instructions = sec.get("instructions", "")
+            sub_headings = " ".join(sec.get("sub_headings", []))
+            
+            sec_text = f"{heading} {instructions} {sub_headings}".lower()
+            sec_words = set(w for w in re.findall(r'\b\w{3,}\b', sec_text) if w not in stop_words)
+            
+            if not sec_words:
+                continue
+                
+            overlap = len(url_words & sec_words)
+            if overlap >= 1:
+                matched_sections.append(sec_id)
+                
+        url_to_headings[u["url"]] = matched_sections
+        
+    return url_to_headings
 
-    try:
-        response = extractor._call_gemini(
-            contents=prompt,
-            config=extractor.types.GenerateContentConfig(temperature=0.1),
-            tier="cheap",
-            judgment=False
-        )
-        parsed = extractor._parse_json_response(response.text)
-        if parsed and isinstance(parsed, dict) and "url_to_headings" in parsed:
-            return parsed["url_to_headings"]
-        return {}
-    except Exception as e:
-        print(f"Error in route_urls_to_headings: {e}")
-        return {}
 
 
 def discover_sources_for_session(
@@ -835,7 +917,16 @@ def discover_sources_for_session(
             
         # Scale search queries by depth
         queries = discoverer.generate_search_queries(vector, refined_prompt, depth)
-        queries_to_run = queries
+        
+        # Scale queries based on vector priority
+        priority = str(vector.get("priority", "medium")).lower()
+        if priority == "low":
+            queries_to_run = queries[:min(3, len(queries))]
+        elif priority == "medium" or priority == "standard":
+            queries_to_run = queries[:min(6, len(queries))]
+        else:
+            queries_to_run = queries
+            
         vector_sources = []
         
         # Inject curated carrier URLs if matched
@@ -914,6 +1005,11 @@ def discover_sources_for_session(
                         continue
                     try:
                         ddg_max = 5 if depth == "surface" else (10 if depth == "standard" else 12)
+                        if priority == "low":
+                            ddg_max = min(ddg_max, 4)
+                        elif priority == "medium" or priority == "standard":
+                            ddg_max = min(ddg_max, 6)
+                            
                         hits = list(ddgs.text(q, max_results=ddg_max))
                         for hit in hits:
                             url = hit.get("href", "")
@@ -1062,9 +1158,10 @@ def discover_sources_for_session(
     return all_scored
 
 
-def validate_page_entity(title: str, url: str, content: str, subject: str) -> dict:
+def validate_page_entity(title: str, url: str, content: str, subject: str, depth: str = "standard") -> dict:
     """
     Performs pre-scrape entity and soft-404 validation.
+    Mechanized implementation using extended keyword and regex checks (no LLM call).
     """
     url_lower = url.lower()
     title_lower = title.lower() if title else ""
@@ -1073,88 +1170,50 @@ def validate_page_entity(title: str, url: str, content: str, subject: str) -> di
     # Soft-404 check
     soft_404_keywords = [
         "page not found", "404 - file or directory not found", 
-        "404 error", "404 not found", "error 404"
+        "404 error", "404 not found", "error 404", "site not found", "cannot find"
     ]
     if any(kw in title_lower or kw in content_lower[:1000] for kw in soft_404_keywords):
         return {"valid": False, "reason": "SOFT_404"}
         
-    # Mismatch validation (drift guard) using Gemini (Strong/Mid judgment)
+    # Login page / Empty shell check
+    blocklist_keywords = [
+        "login to your account", "sign in to your account", "enter password", "forgot password",
+        "access denied", "please log in", "signin", "auth/login", "wp-login", "user-login"
+    ]
+    if any(kw in title_lower or kw in content_lower[:500] for kw in blocklist_keywords):
+        if subject and "login" not in subject.lower():
+            return {"valid": False, "reason": "NOT_APPLICABLE (login/gatekeeper wall)"}
+
+    # Subject keyword matching
     if subject:
-        # Pre-filter using high-performance local keyword rules
-        subject_words = [w for w in re.findall(r'\b\w+\b', subject.lower()) if len(w) > 3 and w not in {"with", "that", "this", "from", "their", "about", "everything", "there", "what"}]
-        content_sample = (title_lower + " " + url_lower + " " + content_lower[:2500]).lower()
+        stop_words = {"with", "that", "this", "from", "their", "about", "everything", "there", "what", "how", "why"}
+        subject_words = [w for w in re.findall(r'\b\w{3,}\b', subject.lower()) if w not in stop_words]
         
-        if subject_words:
-            matches = sum(1 for w in subject_words if w in content_sample)
-            min_matches = min(2, len(subject_words))
-            if matches >= min_matches:
-                # Strong keyword match, approve instantly to conserve API quota
-                return {"valid": True, "reason": "SUCCESS"}
-            if matches == 0:
-                # Zero matching keywords, reject instantly
-                return {"valid": False, "reason": "NOT_APPLICABLE (local keyword mismatch)"}
-                
-        # Check key pool status. If all cells are exhausted or cooling down, bypass the LLM gatekeeper
-        import time
-        from engine import extractor
-        has_active_cell = False
-        for state in extractor._cell_states.values():
-            if not state.get("exhausted_today", False) and state.get("cooldown_until", 0) <= time.time():
-                has_active_cell = True
-                break
-                
-        if not has_active_cell:
-            # Bypass LLM when keys are rate-limited or exhausted
-            return {"valid": True, "reason": "SUCCESS"}
-
-        if not extractor._clients:
-            subject_clean = re.sub(r'[^a-zA-Z0-9]', '', subject.lower())
-            if "recruit" in url_lower or "recruit" in title_lower:
-                if "recruit" not in subject_clean:
-                    return {"valid": False, "reason": "NOT_APPLICABLE"}
-            return {"valid": True, "reason": "SUCCESS"}
-            
-        snippet = content_lower[:3000]
-        prompt = f"""You are a strict research gatekeeper checking if a web page matches the target entity, scope, and query intent.
+        content_sample = (title_lower + " " + url_lower + " " + content_lower[:4000])
         
-Target Entity/Scope/Topic being researched: "{subject}"
-
-Web Page Details:
-URL: {url}
-Title: {title}
-Snippet of content:
-{snippet}
-
-Evaluate if this web page:
-1. Belongs to a different entity (e.g., same name but completely different company/product, or generic top-level search portal, dictionary/definition page).
-2. Is completely out of scope or irrelevant to the target research (e.g., wrong geography, wrong business model).
-3. Is a generic consumer help portal, terms of service page, listicle blog (e.g. "top 10 reviews"), or marketing homepage with no detailed technical documentation or data points.
-4. Is a generic login page, placeholder, or empty shell.
-
-Return a JSON object matching this schema:
-{{
-  "valid": true/false,
-  "reason": "SUCCESS" or "NOT_APPLICABLE (entity mismatch/drift: explanation)" or "SOFT_404"
-}}
-Return ONLY valid JSON. Do not include markdown blocks or other wrapper text."""
-
-        try:
-            response = extractor._call_gemini(
-                contents=prompt,
-                tier="cheap",
-                judgment=False,
-                config=extractor.types.GenerateContentConfig(temperature=0.1)
-            )
-            parsed = extractor._parse_json_response(response.text)
-            if parsed and isinstance(parsed, dict):
-                return {
-                    "valid": parsed.get("valid", True),
-                    "reason": parsed.get("reason", "SUCCESS")
-                }
-        except Exception as e:
-            print(f"      Entity validation LLM call failed: {e}")
+        synonyms = {
+            "ai": "artificial intelligence",
+            "ml": "machine learning",
+            "kyc": "know your customer",
+            "cod": "cash on delivery",
+            "rto": "return to origin"
+        }
+        
+        expanded_words = list(subject_words)
+        for w in subject_words:
+            if w in synonyms:
+                expanded_words.append(synonyms[w])
+                
+        matches = 0
+        for w in expanded_words:
+            if w in content_sample:
+                matches += 1
+                
+        if len(subject_words) > 0 and matches == 0:
+            return {"valid": False, "reason": "NOT_APPLICABLE (subject keyword mismatch)"}
             
     return {"valid": True, "reason": "SUCCESS"}
+
 
 
 def _compute_tf(text: str) -> dict:
@@ -1348,8 +1407,18 @@ def deep_research_vector(
         if src.get("source_type") == "youtube" or "youtube.com" in url or "youtu.be" in url:
             transcript = fetch_youtube_transcript(url)
             if transcript:
+                if len(transcript) > 4000:
+                    old_len = len(transcript)
+                    keywords = [topic] + list(hints) + list(v_data_points)
+                    max_chunks = 9
+                    if depth == "surface":
+                        max_chunks = 5
+                    elif depth == "deep":
+                        max_chunks = 15
+                    transcript = prune_boilerplate_chunks(transcript, keywords=keywords, max_chunks=max_chunks, chunk_size=800)
+                    print(f"      [Text Filter] Pruned YouTube transcript: {old_len} -> {len(transcript)} chars.")
                 _safe_progress(progress_cb, f"📺 Extracting from YouTube transcript: {_shorten_url(url)}")
-                val = validate_page_entity(src.get("title", ""), url, transcript, vector_scope)
+                val = validate_page_entity(src.get("title", ""), url, transcript, vector_scope, depth=depth)
                 if not val["valid"]:
                     _safe_progress(progress_cb, f"    [Skipped source: {val['reason']}]")
                     src["had_data"] = False
@@ -1405,8 +1474,18 @@ def deep_research_vector(
             page = _run_async(fetch_page(url, timeout=20000))
             if page["success"] and page["markdown"] and len(page["markdown"]) > 100:
                 markdown_content = page["markdown"]
+                if len(markdown_content) > 4000:
+                    old_len = len(markdown_content)
+                    keywords = [topic] + list(hints) + list(v_data_points)
+                    max_chunks = 9
+                    if depth == "surface":
+                        max_chunks = 5
+                    elif depth == "deep":
+                        max_chunks = 15
+                    markdown_content = prune_boilerplate_chunks(markdown_content, keywords=keywords, max_chunks=max_chunks, chunk_size=800)
+                    print(f"      [Text Filter] Pruned page content: {old_len} -> {len(markdown_content)} chars.")
                 
-                val = validate_page_entity(page.get("title", ""), url, markdown_content, vector_scope)
+                val = validate_page_entity(page.get("title", ""), url, markdown_content, vector_scope, depth=depth)
                 if not val["valid"]:
                     _safe_progress(progress_cb, f"    [Skipped source: {val['reason']}]")
                     src["had_data"] = False
@@ -1464,9 +1543,11 @@ def deep_research_vector(
             
     # Scale grounded research skip threshold by depth
     skip_grounded = False
-    if depth == "surface" and len(page_extractions) >= 4:
+    if depth == "surface" and len(page_extractions) >= 2:
         skip_grounded = True
-    elif depth == "standard" and len(page_extractions) >= 6:
+    elif depth == "standard" and len(page_extractions) >= 3:
+        skip_grounded = True
+    elif depth == "deep" and len(page_extractions) >= 5:
         skip_grounded = True
         
     if skip_grounded:
@@ -1603,9 +1684,16 @@ def deep_research_company(
             if page["success"] and page["markdown"] and len(page["markdown"]) > 100:
                 source_record["success"] = True
                 source_record["title"] = page.get("title", "")
-                source_record["content_length"] = len(page["markdown"])
+                
+                markdown_content = page["markdown"]
+                if len(markdown_content) > 4000:
+                    old_len = len(markdown_content)
+                    keywords = [company] + list(data_points)
+                    markdown_content = prune_boilerplate_chunks(markdown_content, keywords=keywords, max_chunks=15, chunk_size=800)
+                    print(f"      [Text Filter] Pruned page content for {url}: {old_len} -> {len(markdown_content)} chars.")
+                source_record["content_length"] = len(markdown_content)
 
-                extraction = _extract_prices_from_page(page["markdown"], company, data_points, instruction)
+                extraction = _extract_prices_from_page(markdown_content, company, data_points, instruction)
                 if extraction and not extraction.get("no_data") and not (isinstance(extraction, dict) and extraction.get("found") is False):
                     extraction["_source_url"] = url
                     page_extractions.append(extraction)
@@ -1705,8 +1793,8 @@ Return ONLY valid JSON, no explanations, no markdown fences."""
 
 def _extract_prices_from_page(content: str, company: str, data_points: list[str], instruction: str) -> dict:
     """Extract specific parameter data from scraped page content."""
-    if len(content) > 50000:
-        content = content[:50000]
+    if len(content) > 15000:
+        content = content[:15000]
     prompt = _build_extraction_prompt(company, data_points, content)
     try:
         result = extractor._call_gemini(
@@ -1830,10 +1918,72 @@ def _shorten_url(url: str, max_len: int = 60) -> str:
     return url[:max_len] + "..." if len(url) > max_len else url
 
 
-def extract_for_heading(section: dict, sources_data: list[dict], original_query: str) -> dict:
+def find_numerical_conflicts(extracted_items: list[dict]) -> list[dict]:
+    """
+    Find conflicts/discrepancies in numerical values extracted for the same parameters
+    across different sources.
+    """
+    import re
+    # Map parameter_name -> list of (url, raw_value, numeric_value)
+    param_vals = {}
+    num_re = re.compile(r'\b\d+(?:\.\d+)?\b')
+    
+    for item in extracted_items:
+        url = item.get("_source_url", "Unknown")
+        # Try both structured_data and data_points
+        dps = item.get("data_points") or item.get("structured_data") or {}
+        if not isinstance(dps, dict):
+            continue
+            
+        for k, v in dps.items():
+            if v is None or v == "" or str(v).lower() in ("null", "n/a"):
+                continue
+                
+            # Extract first number found in the value
+            v_str = str(v)
+            num_match = num_re.search(v_str)
+            if num_match:
+                try:
+                    num_val = float(num_match.group(0))
+                    # Normalize key
+                    k_norm = k.lower().strip().replace(" ", "_").replace("-", "_")
+                    if k_norm not in param_vals:
+                        param_vals[k_norm] = []
+                    param_vals[k_norm].append({
+                        "url": url,
+                        "raw_value": v_str,
+                        "numeric_value": num_val,
+                        "display_name": k
+                    })
+                except ValueError:
+                    continue
+
+    conflicts = []
+    for k_norm, vals in param_vals.items():
+        if len(vals) < 2:
+            continue
+            
+        # Check if there is any numerical discrepancy
+        first_num = vals[0]["numeric_value"]
+        has_conflict = False
+        for v in vals[1:]:
+            if abs(v["numeric_value"] - first_num) > 0.01:
+                has_conflict = True
+                break
+                
+        if has_conflict:
+            conflicts.append({
+                "parameter": vals[0]["display_name"],
+                "details": vals
+            })
+            
+    return conflicts
+
+
+def _extract_from_raw_content(section: dict, sources_data: list[dict], original_query: str, depth: str = "standard") -> dict:
     """
     Given a blueprint section and its accumulated scraped contents,
-    extract structured information, key findings, and data points.
+    run the Analyst Loop (single-pass read and reason over concatenated source text).
     """
     if not sources_data:
         return {
@@ -1844,114 +1994,174 @@ def extract_for_heading(section: dict, sources_data: list[dict], original_query:
             "sources": []
         }
         
-    extracted_items = []
-    unique_sources = []
+    # Sort sources by priority/quality score descending so we process the best ones first
+    sources_data = sorted(
+        sources_data,
+        key=lambda x: (x.get("source") or {}).get("score", 50) if isinstance(x, dict) else 50,
+        reverse=True
+    )
     
-    # We will extract from each source independently
+    # Concatenate all source contents with delimiters
+    combined_content = ""
+    unique_sources = []
+    seen_urls = set()
+    scraped_imgs = []
+    
     for src in sources_data:
-        content = src.get("content")
-        url = src.get("url")
+        content = src.get("content", "")
+        url = src.get("url", "")
         source_entry = src.get("source")
         
-        if not content or len(content) < 100:
-            continue
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            if source_entry:
+                unique_sources.append(source_entry)
+            else:
+                unique_sources.append({
+                    "url": url,
+                    "title": src.get("title", url),
+                    "score": src.get("score", 50),
+                    "tier": src.get("tier", "Tier 6")
+                })
+        
+        if content and len(content) > 100:
+            combined_content += f"\n\n=== SOURCE: {url} ===\n{content}\n"
             
-        # Build prompt for extracting section details from this specific source
-        prompt = f"""You are a precise data extraction AI. Extract the relevant information from the web page content to help write the report section: "{section['heading']}".
-        
-        Section Instructions: {section.get('instructions', '')}
-        Section Sub-headings to cover: {', '.join(section.get('sub_headings', []))}
-        Original Query context: {original_query}
-        
-        PAGE CONTENT:
-        {content[:40000]}
-        
-        Rules:
-        1. Extract specific facts, numbers, rates, entities, process steps, timeline events, or comparison parameters.
-        2. Identify any process flows that could be represented as flowcharts, or comparisons that could be tables.
-        3. Return ONLY a valid JSON object with the keys:
-           - "findings": A list of specific factual findings or text snippets extracted from the page.
-           - "data_points": Key-value pairs of any parameters, pricing, rates, or metrics.
-           - "entities": Any platforms, competitors, or compliance bodies mentioned.
-           - "process_steps": A list of steps for any workflows or transaction flows detected.
-           - "timeline_events": A list of events with dates/milestones if any roadmap/milestones are detected.
-           - "found": true/false
-           
-        Return ONLY valid JSON. No markdown fences, no explanations."""
-        
-        try:
-            result = extractor._call_gemini(
-                contents=prompt,
-                config=extractor.types.GenerateContentConfig(temperature=0.1),
-                tier="cheap",
-                judgment=False
-            )
-            parsed = extractor._parse_json_response(result.text)
-            if parsed and parsed.get("found"):
-                parsed["_source_url"] = url
-                extracted_items.append(parsed)
-                if source_entry:
-                    unique_sources.append(source_entry)
-        except Exception as e:
-            print(f"Error extracting for heading {section['heading']} from {url}: {e}")
+        if isinstance(src, dict) and "images" in src:
+            scraped_imgs.extend(src["images"])
             
-    # Now merge all the extractions for this heading
-    if not extracted_items:
-        return {
-            "section_id": section["id"],
-            "success": False,
-            "error": "Failed to extract data from sources.",
-            "data": None,
-            "sources": []
-        }
+    # Budget scaling based on depth
+    budget = 40000 if depth == "surface" else (60000 if depth == "standard" else 80000)
+    if len(combined_content) > budget:
+        keywords = [section["heading"]] + section.get("sub_headings", [])
+        combined_content = prune_boilerplate_chunks(
+            combined_content, 
+            keywords=keywords,
+            max_chunks=budget // 800, 
+            chunk_size=800
+        )
         
-    # Build a prompt to merge all section extractions into a single structured representation
-    merge_prompt = f"""Merge the extracted research data for the report section "{section['heading']}" from multiple sources into ONE consolidated JSON object.
+    # Build prompt based on content type
+    content_type = section.get("content_type", "narrative")
+    instructions = section.get("instructions", "")
     
-    Section Instructions: {section.get('instructions', '')}
-    Sub-headings to cover: {', '.join(section.get('sub_headings', []))}
-    
-    Source Extractions:
-    {json.dumps(extracted_items, indent=2)}
-    
-    The merged output MUST be a clean JSON object containing:
-    - "consolidated_findings": A list of detailed factual points, combining duplicates and resolving conflicts.
-    - "structured_data": A clean dictionary of all parameters, metrics, or comparisons.
-    - "workflows": A list of workflows or transaction flows (with steps) that can be drawn as flowcharts.
-    - "timelines": A list of chronological events/milestones.
-    - "sources": A list of URLs that contributed to this section.
-    
-    Return ONLY valid JSON. No markdown fences, no explanations."""
-    
+    content_type_prompt = ""
+    if content_type == "flowchart":
+        content_type_prompt = """The content of this section MUST primarily consist of a detailed Mermaid flowchart showing the process flow, payment workflow, or logic triggers.
+        Format the flowchart inside a markdown mermaid block:
+        ```mermaid
+        graph TD
+            A[Start] --> B[Step 1]
+        ```
+        Explain the flowchart steps briefly (1-2 sentences per step)."""
+    elif content_type == "narrative_with_flowchart":
+        content_type_prompt = """This section needs both a detailed narrative analysis (2-3 paragraphs) AND a Mermaid flowchart block showing the associated process/payment flow.
+        Format the flowchart inside a markdown mermaid block:
+        ```mermaid
+        graph TD
+            A[Start] --> B[Step 1]
+        ```"""
+    elif content_type == "comparison_table":
+        content_type_prompt = """The content of this section MUST contain a detailed markdown comparison table comparing the platforms/competitors/features.
+        Format the table in markdown:
+        | Parameter | Platform A | Platform B |
+        |---|---|---|"""
+    elif content_type == "timeline":
+        content_type_prompt = """The content of this section MUST contain a chronological timeline or rollout milestones roadmap.
+        Use a Mermaid timeline or gantt chart block if appropriate, or a detailed numbered list with milestones.
+        Format the timeline inside a markdown mermaid block if using mermaid:
+        ```mermaid
+        gantt
+            title Integration Roadmap
+        ```"""
+    elif content_type == "data_matrix":
+        content_type_prompt = """This section must include a detailed data parameter matrix (a structured comparison table showing specific pricing rates, commissions, API limits, or compliance limits)."""
+    else:
+        content_type_prompt = """Write a rich, detailed, professional narrative analysis (3-5 paragraphs) supported by bulleted details."""
+
+    images_context = ""
+    if scraped_imgs:
+        images_context = f"\nScraped webpage images that you can embed in your section using standard markdown `![alt](url)`:\n" + json.dumps(scraped_imgs[:3], indent=2)
+
+    analyst_prompt = f"""You are a senior research analyst. Read ALL the source material below and produce a structured analysis for the report section: "{section['heading']}"
+
+Original User Query: "{original_query}"
+Section Sub-headings to cover: {', '.join(section.get('sub_headings', []))}
+Section Instructions: {instructions}
+Expected Format/Content Type: {content_type}
+
+Formatting Rules:
+{content_type_prompt}
+{images_context}
+
+SOURCE MATERIAL:
+{combined_content}
+
+INSTRUCTIONS:
+1. READ every source carefully. Note specific facts, numbers, dates, processes.
+2. REASON about what you've read:
+   - What patterns or trends emerge across sources?
+   - Where do sources agree? Where do they conflict?
+   - What critical information is MISSING from these sources?
+3. WRITE your analysis as structured JSON matching this schema:
+{{
+  "title": "Title of the section (e.g. '{section['heading']}')",
+  "content": "Detailed markdown content for the section. Include narrative paragraphs, bullet lists, markdown tables, or Mermaid code blocks as requested. Ensure no placeholders or templates are used.",
+  "data": [
+     {{"parameter": "...", "value": "..."}}
+  ], // Optional: list of key-value parameters or structured tabular data. Set to null if no tabular data.
+  "key_findings": ["Key finding bullet 1", "Key finding bullet 2"],
+  "summary": "A 1-sentence summary of this section's core findings for context.",
+  "visualization_hint": "table|chart|flowchart|timeline|bullets",
+  "conflicts": [
+     {{"parameter": "Parameter Name", "details": [{{"url": "...", "raw_value": "..."}}]}}
+  ], // List of numerical or factual discrepancies between sources. Empty list if none.
+  "gaps": ["Detail missing from the sources"], // What was missing or couldn't be answered.
+  "confidence": "high|medium|low"
+}}
+
+CRITICAL constraints:
+- Do NOT pad with filler language ("It is important to note...", "In the modern era...", etc.). Every sentence must contain a specific fact, number, comparison, or insight.
+- If you don't have data for a specific sub-heading or instruction, explicitly note it as a data gap in the JSON's "gaps" list and say "No data found in sources" in the content. Do not write generic paragraphs to fill space.
+- Return ONLY the valid JSON object. No explanations, no markdown fences outside the JSON."""
+
     try:
         result = extractor._call_gemini(
-            contents=merge_prompt,
-            config=extractor.types.GenerateContentConfig(temperature=0.1),
+            contents=analyst_prompt,
+            config=extractor.types.GenerateContentConfig(
+                temperature=0.15,
+                response_mime_type="application/json"
+            ),
             tier="strong",
             judgment=True
         )
         parsed = extractor._parse_json_response(result.text)
-        if parsed:
+        if parsed and isinstance(parsed, dict):
+            # Return matching expected structure
+            parsed["sources"] = [s.get("url") for s in unique_sources]
             return {
                 "section_id": section["id"],
                 "success": True,
                 "data": parsed,
                 "sources": unique_sources
             }
+        else:
+            raise ValueError("Parsed result was not a dictionary or empty")
     except Exception as e:
-        print(f"Error merging extractions for heading {section['heading']}: {e}")
+        print(f"Error in Analyst Loop for heading {section['heading']}: {e}")
         
     # Fallback to simple combine
     combined = {
-        "consolidated_findings": [f for item in extracted_items for f in item.get("findings", [])],
-        "structured_data": {},
-        "workflows": [w for item in extracted_items for w in item.get("process_steps", [])],
-        "timelines": [t for item in extracted_items for t in item.get("timeline_events", [])],
-        "sources": [item["_source_url"] for item in extracted_items]
+        "title": section["heading"],
+        "content": f"Factual findings extracted from sources:\n\n" + "\n".join([f"- From {src.get('url')}: {src.get('snippet')}" for src in sources_data if src.get("snippet")]),
+        "data": None,
+        "key_findings": ["Factual details extracted from sources"],
+        "summary": f"Data extracted for {section['heading']}",
+        "visualization_hint": "bullets",
+        "conflicts": [],
+        "gaps": ["AI synthesis failed, showing raw snippets instead"],
+        "confidence": "low"
     }
-    for item in extracted_items:
-        combined["structured_data"].update(item.get("data_points", {}))
-        
     return {
         "section_id": section["id"],
         "success": True,
@@ -1960,11 +2170,237 @@ def extract_for_heading(section: dict, sources_data: list[dict], original_query:
     }
 
 
+def universal_extract_for_all_headings(content: str, url: str, blueprint: dict, depth: str = "standard") -> dict:
+    """
+    Given a single scraped page's content and the blueprint,
+    extract ALL relevant facts, each tagged with the heading IDs it belongs to.
+    """
+    if not content or len(content) < 100:
+        return {"facts": []}
+
+    # Format the headings list
+    headings_list = []
+    for sec in blueprint.get("sections", []):
+        headings_list.append(f"[{sec['id']}] {sec['heading']}")
+    headings_str = "\n".join(headings_list)
+
+    # Hard cap content at 12,000 characters to save input tokens
+    max_len = 12000
+    if len(content) > max_len:
+        content = content[:max_len]
+
+    prompt = f"""You are a research fact extractor. Given a scraped web page and a list of report section headings, extract ALL factual information relevant to ANY of the headings below.
+
+HEADINGS:
+{headings_str}
+
+PAGE CONTENT:
+{content}
+
+Return JSON with exactly this schema:
+{{
+  "facts": [
+    {{
+      "heading_ids": ["heading_id_1", "heading_id_2"],
+      "fact": "Factual statement including numbers, dates, details, and contexts.",
+      "data_point": {{"parameter": "...", "value": "..."}} // Optional: structured key-value parameter or null
+    }}
+  ],
+  "page_summary": "Brief 1-line description of what this page covers"
+}}
+
+Rules:
+- Extract specific, objective facts (prices, APIs, compliance facts, dates, etc.). Do not extract generic advice.
+- Tag each fact with the exact heading ID(s) it is relevant to from the list above.
+- If a fact is relevant to multiple headings, include multiple heading IDs in the "heading_ids" list.
+- Keep the response structured and return ONLY the valid JSON object.
+"""
+
+    try:
+        result = extractor._call_gemini(
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json"
+            ),
+            tier="mid", # mid-tier is cheaper and fast
+            judgment=False
+        )
+        parsed = extractor._parse_json_response(result.text)
+        if parsed and isinstance(parsed, dict) and "facts" in parsed:
+            # Inject URL into facts for convenience
+            for fact in parsed["facts"]:
+                fact["source_url"] = url
+            return parsed
+    except Exception as e:
+        print(f"Error in universal_extract_for_all_headings: {e}")
+        
+    return {"facts": []}
+
+
+def _assemble_from_facts(section: dict, heading_facts: list[dict], original_query: str) -> dict:
+    """
+    Synthesize pre-extracted facts into a structured section draft using a mid-tier LLM call.
+    """
+    content_type = section.get("content_type", "narrative")
+    instructions = section.get("instructions", "")
+    
+    content_type_prompt = ""
+    if content_type == "flowchart":
+        content_type_prompt = """The content of this section MUST primarily consist of a detailed Mermaid flowchart showing the process flow, payment workflow, or logic triggers.
+        Format the flowchart inside a markdown mermaid block:
+        ```mermaid
+        graph TD
+            A[Start] --> B[Step 1]
+        ```
+        Explain the flowchart steps briefly (1-2 sentences per step)."""
+    elif content_type == "narrative_with_flowchart":
+        content_type_prompt = """This section needs both a detailed narrative analysis (2-3 paragraphs) AND a Mermaid flowchart block showing the associated process/payment flow.
+        Format the flowchart inside a markdown mermaid block:
+        ```mermaid
+        graph TD
+            A[Start] --> B[Step 1]
+        ```"""
+    elif content_type == "comparison_table":
+        content_type_prompt = """The content of this section MUST contain a detailed markdown comparison table comparing the platforms/competitors/features.
+        Format the table in markdown:
+        | Parameter | Platform A | Platform B |
+        |---|---|---|"""
+    elif content_type == "timeline":
+        content_type_prompt = """The content of this section MUST contain a chronological timeline or rollout milestones roadmap.
+        Use a Mermaid timeline or gantt chart block if appropriate, or a detailed numbered list with milestones.
+        Format the timeline inside a markdown mermaid block if using mermaid:
+        ```mermaid
+        gantt
+            title Integration Roadmap
+        ```"""
+    elif content_type == "data_matrix":
+        content_type_prompt = """This section must include a detailed data parameter matrix (a structured comparison table showing specific pricing rates, commissions, API limits, or compliance limits)."""
+    else:
+        content_type_prompt = """Write a rich, detailed, professional narrative analysis (3-5 paragraphs) supported by bulleted details."""
+
+    # Collect source URLs and unique sources
+    unique_sources = []
+    seen_urls = set()
+    facts_list = []
+    
+    for f in heading_facts:
+        url = f.get("source_url", "")
+        facts_list.append({
+            "fact": f.get("fact"),
+            "data_point": f.get("data_point"),
+            "source_url": url
+        })
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            source_entry = f.get("source")
+            if source_entry:
+                unique_sources.append(source_entry)
+            else:
+                unique_sources.append({
+                    "url": url,
+                    "title": url,
+                    "score": 50,
+                    "tier": "Tier 6"
+                })
+
+    facts_json = json.dumps(facts_list, indent=2)
+
+    prompt = f"""You are a report section writer. Assemble these pre-verified facts into a structured section.
+
+Section: "{section['heading']}"
+Content Type: {content_type}
+Sub-headings to cover: {', '.join(section.get('sub_headings', []))}
+Instructions: {instructions}
+
+FACTS:
+{facts_json}
+
+Formatting Rules:
+{content_type_prompt}
+
+INSTRUCTIONS:
+1. Synthesize the provided facts into a coherent and professional report section.
+2. Only write about facts that are supported by the provided facts list. Do not hallucinate or make up facts.
+3. Write your analysis as structured JSON matching this schema:
+{{
+  "title": "Title of the section (e.g. '{section['heading']}')",
+  "content": "Detailed markdown content for the section. Include narrative paragraphs, bullet lists, markdown tables, or Mermaid code blocks as requested. Ensure no placeholders or templates are used.",
+  "data": [
+     {{"parameter": "...", "value": "..."}}
+  ], // Optional: list of key-value parameters or structured tabular data. Set to null if no tabular data.
+  "key_findings": ["Key finding bullet 1", "Key finding bullet 2"],
+  "summary": "A 1-sentence summary of this section's core findings for context.",
+  "visualization_hint": "table|chart|flowchart|timeline|bullets",
+  "conflicts": [],
+  "gaps": [],
+  "confidence": "high|medium|low"
+}}
+
+CRITICAL constraints:
+- Do NOT pad with filler language. Every sentence must contain a specific fact, number, comparison, or insight.
+- Return ONLY the valid JSON object. No explanations, no markdown fences outside the JSON.
+"""
+
+    result = extractor._call_gemini(
+        contents=prompt,
+        config=extractor.types.GenerateContentConfig(
+            temperature=0.15,
+            response_mime_type="application/json"
+        ),
+        tier="mid", # mid tier for assembly
+        judgment=False
+    )
+    parsed = extractor._parse_json_response(result.text)
+    if parsed and isinstance(parsed, dict):
+        parsed["sources"] = list(seen_urls)
+        return {
+            "section_id": section["id"],
+            "success": True,
+            "data": parsed,
+            "sources": unique_sources
+        }
+    else:
+        raise ValueError("Parsed result was not a dictionary or empty")
+
+
+def assemble_heading_draft(section: dict, heading_facts: list[dict], heading_raw_data: list[dict], 
+                           original_query: str, depth: str = "standard") -> dict:
+    """
+    Assemble a section draft from pre-extracted facts.
+    Falls back to full raw-content extraction if no/insufficient facts are available.
+    """
+    # Path A: We have pre-extracted facts → lightweight assembly
+    if heading_facts and len(heading_facts) >= 3:
+        try:
+            return _assemble_from_facts(section, heading_facts, original_query)
+        except Exception as e:
+            print(f"Failed to assemble section {section['heading']} from facts: {e}. Falling back to raw content.")
+            
+    # Path B: Fallback behavior — full raw content extraction
+    return _extract_from_raw_content(section, heading_raw_data, original_query, depth)
+
+
+
 def scrape_and_extract_for_pool(pool, max_workers=3, progress_cb=None, depth="standard"):
     """
     Async scraper pool. Workers pop URLs from the shared queue,
     scrape them, and fan out content to heading accumulators.
     """
+    debug_path = os.path.join(pool.output_folder, "scraper_debug.log")
+    try:
+        with open(debug_path, "w", encoding="utf-8") as df:
+            df.write(f"Scraper loop started.\n")
+            df.write(f"Initial queue size: {len(pool.queue)}\n")
+            df.write(f"Initial seen URLs: {len(pool.seen_urls)}\n")
+            hungry = pool.get_hungry_headings()
+            df.write(f"Initial hungry headings: {hungry}\n")
+            for hid in pool.heading_data.keys():
+                status = pool.get_heading_status(hid)
+                df.write(f"  - Heading {hid}: status={status}, data_len={len(pool.heading_data[hid])}, facts_len={len(pool.heading_facts.get(hid, []))}\n")
+    except Exception as e:
+        print(f"Failed to write scraper_debug.log: {e}")
+
     def _safe_progress(cb, msg):
         if cb:
             try:
@@ -1995,9 +2431,28 @@ def scrape_and_extract_for_pool(pool, max_workers=3, progress_cb=None, depth="st
             print(f"Scraper worker exception for {url}: {e}")
             
         if content and len(content) > 100:
+            if len(content) > 4000:
+                keywords = []
+                doc_title = pool.blueprint.get("document_title", "")
+                if doc_title:
+                    keywords.append(doc_title)
+                
+                for sec in pool.blueprint.get("sections", []):
+                    keywords.append(sec.get("heading", ""))
+                    keywords.extend(sec.get("sub_headings", [])[:2])  # limit to avoid over-filtering
+                
+                old_len = len(content)
+                max_chunks = 7
+                if depth == "surface":
+                    max_chunks = 4
+                elif depth == "deep":
+                    max_chunks = 12
+                content = prune_boilerplate_chunks(content, keywords=keywords, max_chunks=max_chunks, chunk_size=800)
+                print(f"      [Text Filter] Pruned content for {url}: {old_len} -> {len(content)} chars.")
+
             # Validate page entity to check for soft-404 or completely off-topic page
             vector_scope = f"{entry.get('title', '')}. Overall query: {pool.blueprint.get('document_title', '')}"
-            val = validate_page_entity(entry.get("title", ""), url, content, vector_scope)
+            val = validate_page_entity(entry.get("title", ""), url, content, vector_scope, depth=depth)
             if not val["valid"]:
                 _safe_progress(progress_cb, f"    [Skipped source {val['reason']}: {_shorten_url(url)}]")
                 session_output.update_sources_ledger_entry(pool.output_folder, url, val["reason"], False, entry)
@@ -2006,6 +2461,24 @@ def scrape_and_extract_for_pool(pool, max_workers=3, progress_cb=None, depth="st
                 
             # Submit to pool
             pool.submit_scraped_content(url, content, images, entry)
+            
+            # Universal fact extraction for ALL headings
+            try:
+                facts_result = universal_extract_for_all_headings(
+                    content=content,
+                    url=url,
+                    blueprint=pool.blueprint,
+                    depth=depth
+                )
+                if facts_result and facts_result.get("facts"):
+                    pool.submit_extracted_facts(url, facts_result["facts"], entry)
+                    _safe_progress(progress_cb, 
+                        f"    Extracted {len(facts_result['facts'])} facts for "
+                        f"{len(set(h for f in facts_result['facts'] for h in f.get('heading_ids', [])))} headings"
+                    )
+            except Exception as e:
+                print(f"Universal extraction failed for {url}: {e}")
+                # Non-fatal — heading-level extraction will still work as fallback
             
             # Write to files
             session_output.update_sources_ledger_entry(pool.output_folder, url, "SUCCESS", True, entry)
@@ -2016,20 +2489,45 @@ def scrape_and_extract_for_pool(pool, max_workers=3, progress_cb=None, depth="st
             session_output.append_failure(pool.output_folder, url, entry.get("tier", "TIER_6"), "Scrape returned empty", "Marked as FAILED")
             return False
 
+    from concurrent.futures import ThreadPoolExecutor
+    import concurrent.futures
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {}
+        futures = {}  # mapping of future -> entry
         
         while True:
+            # Check for any finished futures that raised an exception
+            for fut in list(futures.keys()):
+                if fut.done() and not getattr(fut, '_checked_err', False):
+                    fut._checked_err = True
+                    fut.result()  # This raises the exception if the future failed
+
             # Check if all headings are satisfied
             hungry = pool.get_hungry_headings()
             if not hungry:
                 _safe_progress(progress_cb, "✅ All headings satisfied. Stopping scraper loop.")
+                # Cancel remaining in-flight futures
+                for fut in list(futures.keys()):
+                    if not fut.done():
+                        fut.cancel()
                 break
+                
+            active_futures = [f for f in futures.keys() if not f.done()]
+            
+            # Throttle submission to max_workers concurrent tasks
+            if len(active_futures) >= max_workers:
+                concurrent.futures.wait(active_futures, return_when=concurrent.futures.FIRST_COMPLETED)
+                continue
                 
             entry = pool.pop_next()
             if entry is None:
-                # Queue empty but some headings still hungry
-                # Trigger adaptive re-discovery for hungry headings
+                # If we still have active scraper workers, wait for at least one to finish
+                # before we declare the queue empty and trigger re-discovery
+                if active_futures:
+                    concurrent.futures.wait(active_futures, return_when=concurrent.futures.FIRST_COMPLETED)
+                    continue
+                
+                # Truly empty and no workers running: trigger adaptive re-discovery
                 _safe_progress(progress_cb, f"🔍 Scrape queue empty. Running adaptive re-discovery for {len(hungry)} hungry headings...")
                 new_sources = adaptive_rediscovery(pool, hungry)
                 if not new_sources:
@@ -2041,9 +2539,15 @@ def scrape_and_extract_for_pool(pool, max_workers=3, progress_cb=None, depth="st
             fut = executor.submit(_scrape_worker, entry)
             futures[fut] = entry
             
-        # Wait for in-flight tasks to finish
-        if futures:
-            concurrent.futures.wait(futures.keys())
+        # Clean up and wait for any remaining active futures to finish
+        active_futures = [f for f in futures.keys() if not f.done()]
+        if active_futures:
+            concurrent.futures.wait(active_futures)
+            
+        for fut in list(futures.keys()):
+            if not getattr(fut, '_checked_err', False):
+                fut._checked_err = True
+                fut.result()
 
 
 def adaptive_rediscovery(pool, hungry_heading_ids) -> int:
@@ -2051,6 +2555,7 @@ def adaptive_rediscovery(pool, hungry_heading_ids) -> int:
     When headings are still hungry after initial sources are exhausted,
     generate MORE SPECIFIC search queries targeting those hungry headings,
     search them, and add to the pool.
+    Mechanized implementation using query templates (no LLM call).
     """
     from ddgs import DDGS
     from engine import discoverer
@@ -2061,56 +2566,46 @@ def adaptive_rediscovery(pool, hungry_heading_ids) -> int:
         if not heading:
             continue
             
-        # Generate specific search query using Gemini
-        prompt = f"""You are a search query expert. Generate exactly 3 highly specific, targeted search queries for DuckDuckGo to find information for the following specific report section:
+        title_text = heading['heading']
+        sub_headings = heading.get('sub_headings', [])
         
-        Section Title: "{heading['heading']}"
-        Sub-headings: {', '.join(heading.get('sub_headings', []))}
-        Instructions: {heading.get('instructions', '')}
+        clean_title = re.sub(r'[^a-zA-Z0-9\s]', '', title_text).strip()
         
-        CRITICAL RULES:
-        - Do not use site: or site operators.
-        - Keep them under 8 words.
-        - Focus strictly on answering the specific questions in this section.
+        queries = []
+        queries.append(clean_title)
         
-        Return a JSON list of exactly 3 query strings. Return ONLY the JSON list."""
+        if sub_headings:
+            queries.append(f"{clean_title} {sub_headings[0]}")
+        else:
+            queries.append(f"{clean_title} official documentation")
+            
+        queries.append(f"{clean_title} integration guide pricing")
         
-        try:
-            response = extractor._call_gemini(
-                contents=prompt,
-                config=extractor.types.GenerateContentConfig(temperature=0.2),
-                tier="cheap",
-                judgment=False
-            )
-            parsed = extractor._parse_json_response(response.text)
-            if parsed and isinstance(parsed, list):
-                with DDGS() as ddgs:
-                    for q in parsed[:3]:
-                        q_sanitized = _sanitize_search_query(q)
-                        if not q_sanitized:
-                            continue
-                        try:
-                            hits = list(ddgs.text(q_sanitized, max_results=5))
-                            for hit in hits:
-                                url = hit.get("href", "")
-                                if url and url not in pool.seen_urls:
-                                    if any(blocked in url.lower() for blocked in BLOCKED_DOMAINS):
-                                        continue
-                                    
-                                    # Since this query is specific to this hungry heading, tag it directly
-                                    pool.add_source(
-                                        url=url,
-                                        title=hit.get("title", ""),
-                                        snippet=hit.get("body", ""),
-                                        score=70,  # default moderate score for re-discovery
-                                        source_type="web",
-                                        relevant_heading_ids=[heading_id],
-                                        vector_id="re-discovery"
-                                    )
-                                    new_count += 1
-                        except Exception as e:
-                            print(f"Adaptive search failed for '{q_sanitized}': {e}")
-        except Exception as e:
-            print(f"Error in adaptive rediscovery for heading {heading_id}: {e}")
+        with DDGS() as ddgs:
+            for q in queries[:3]:
+                q_sanitized = _sanitize_search_query(q)
+                if not q_sanitized:
+                    continue
+                try:
+                    hits = list(ddgs.text(q_sanitized, max_results=5))
+                    for hit in hits:
+                        url = hit.get("href", "")
+                        if url and url not in pool.seen_urls:
+                            if any(blocked in url.lower() for blocked in BLOCKED_DOMAINS):
+                                continue
+                            
+                            pool.add_source(
+                                url=url,
+                                title=hit.get("title", ""),
+                                snippet=hit.get("body", ""),
+                                score=70,  # default moderate score for re-discovery
+                                source_type="web",
+                                relevant_heading_ids=[heading_id],
+                                vector_id="re-discovery"
+                            )
+                            new_count += 1
+                except Exception as e:
+                    print(f"Adaptive search failed for '{q_sanitized}': {e}")
             
     return new_count
+

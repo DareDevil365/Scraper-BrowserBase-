@@ -566,6 +566,12 @@ function displayResearchReport(synthesis, sources) {
             </svg>
             Export Report (${outputFormat.toUpperCase()})
         </a>
+        <a href="/api/research/export/${currentSessionId}?format=html" class="btn-secondary" download style="margin-left: 10px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download HTML Report
+        </a>
     `;
 
     // Summary Text
@@ -899,7 +905,7 @@ function handleApiError(errorMsg, defaultPrefix = 'Error') {
     }
 }
 
-async function saveConfig() {
+async function saveConfig(persist) {
     const pplx = document.getElementById('perplexityKey').value.trim();
     const gemini = document.getElementById('geminiKey').value.trim();
     const yt = document.getElementById('youtubeKey').value.trim();
@@ -907,7 +913,10 @@ async function saveConfig() {
     try {
         const payload = {};
         if (pplx) payload.perplexity_key = pplx;
-        if (gemini) payload.gemini_key = gemini;
+        if (gemini) {
+            payload.gemini_key = gemini;
+            payload.persist = !!persist;
+        }
         if (yt) payload.youtube_key = yt;
 
         let responseMsg = 'Settings saved successfully!';
@@ -1155,6 +1164,12 @@ function renderSessionDetailsIntoCard(session, container) {
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
                 Export Report (${(session.output_format || 'PDF').toUpperCase()})
+            </a>
+            <a href="/api/research/export/${session.id}?format=html" class="btn-secondary" download style="margin-left: 10px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon" width="16" height="16">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Download HTML Report
             </a>
         `;
         headerDiv.appendChild(downloadsDiv);

@@ -80,9 +80,15 @@ def reload_keys_if_changed():
         except Exception as e:
             print(f"[!] Error dynamically reloading API keys: {e}")
 
-if not API_KEY:
+if API_KEY:
+    try:
+        extractor.configure(API_KEY)
+    except Exception as e:
+        print(f"[!] Error configuring API keys: {e}")
+else:
     print("[!] Warning: No keys found in api_keys.txt or environment variables. Web server will start, but you must add your key in the settings modal in the UI to run research.")
     API_KEY = ""
+
 PERPLEXITY_KEY = ""  # User can set via /api/config or env var
 YOUTUBE_KEY = os.environ.get("YOUTUBE_API_KEY", "")  # Optional YouTube Data API key
 
@@ -100,12 +106,15 @@ def run_presenter_for_session(output_folder: str, output_format: str) -> str:
     if fmt not in {"docx", "html", "pdf", "xlsx"}:
         fmt = "docx"
 
+    # Always generate HTML file alongside any other requested format
+    formats = f"{fmt},html" if fmt != "html" else "html"
+
     present_py = Path(__file__).parent / "present.py"
     if not present_py.exists():
         present_py = Path("present.py").resolve()
 
     subprocess.run(
-        [sys.executable, str(present_py), output_folder, "--formats", fmt],
+        [sys.executable, str(present_py), output_folder, "--formats", formats],
         check=True,
     )
 
@@ -237,6 +246,27 @@ def api_config():
         try:
             key_num = extractor.add_key(data["gemini_key"])
             updated.append(f"Gemini API key added as Key #{key_num}")
+            if data.get("persist"):
+                try:
+                    existing_keys = set()
+                    if os.path.exists(_keys_file_path):
+                        with open(_keys_file_path, "r", encoding="utf-8") as f:
+                            for line in f:
+                                k = line.strip()
+                                if k and not k.startswith("#"):
+                                    existing_keys.add(k)
+                    new_key = data["gemini_key"].strip()
+                    if new_key and new_key not in existing_keys:
+                        with open(_keys_file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        sep = "" if (not content or content.endswith("\n") or content.endswith("\r")) else "\n"
+                        with open(_keys_file_path, "a", encoding="utf-8") as f:
+                            f.write(f"{sep}{new_key}\n")
+                        print(f"[*] Persisted new Gemini key to api_keys.txt: {new_key[:10]}...")
+                        updated.append("Saved persistently to api_keys.txt")
+                except Exception as pe:
+                    print(f"[!] Error writing key to api_keys.txt: {pe}")
+                    updated.append(f"(Warning: Failed to save persistently: {pe})")
         except ValueError as e:
             if "already in the rotation" in str(e):
                 updated.append("Gemini API key already in pool (skipped)")
@@ -938,9 +968,9 @@ def api_research_session_stream(session_id):
 
         # 2. Instantiate SourcePool and populate from scrape_queue.json
         from engine.source_pool import SourcePool
-        from engine.deep_extractor import scrape_and_extract_for_pool, extract_for_heading
+        from engine.deep_extractor import scrape_and_extract_for_pool, assemble_heading_draft
         
-        pool = SourcePool(blueprint, output_folder)
+        pool = SourcePool(blueprint, output_folder, vectors=vectors)
         queue_path = os.path.join(output_folder, "scrape_queue.json")
         if os.path.exists(queue_path):
             try:
@@ -986,12 +1016,20 @@ def api_research_session_stream(session_id):
             try:
                 scrape_and_extract_for_pool(
                     pool=pool,
-                    max_workers=3,
+                    max_workers=5,
                     progress_cb=progress_callback,
                     depth=session.get("depth", "standard")
                 )
                 msg_queue.put({"type": "done", "success": True})
             except Exception as e:
+                import traceback
+                error_info = traceback.format_exc()
+                try:
+                    debug_log_path = os.path.join(output_folder, "scraping_error.log")
+                    with open(debug_log_path, "w", encoding="utf-8") as df:
+                        df.write(f"Exception: {e}\n\n{error_info}")
+                except Exception as log_err:
+                    print(f"Failed to write scraping error log: {log_err}")
                 msg_queue.put({"type": "done", "success": False, "error": str(e)})
 
         import threading
@@ -1053,7 +1091,7 @@ def api_research_session_stream(session_id):
         section_results = {}
         all_vector_results = []  # compatibility list
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as extractor_executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as extractor_executor:
             futures = {}
             for sec in sections:
                 sid = sec["id"]
@@ -1061,9 +1099,10 @@ def api_research_session_stream(session_id):
                     section_results[sid] = drafts[sid]
                     continue
                 # Get heading content from pool
+                heading_facts = pool.heading_facts.get(sid, [])
                 heading_content = pool.heading_data.get(sid, [])
                 fut = extractor_executor.submit(
-                    extract_for_heading, sec, heading_content, original_query
+                    assemble_heading_draft, sec, heading_facts, heading_content, original_query, session.get("depth", "standard")
                 )
                 futures[fut] = sec
                 
@@ -1345,6 +1384,22 @@ def api_research_session_stream(session_id):
                 session_output.write_sources_log_csv(output_folder, all_sources, original_query)
             except Exception:
                 pass
+            
+            # Calculate if V2 is eligible: at least 50% of low-coverage vectors improved AND >= 2 improved
+            # or if there was only 1 low-coverage vector, if it improved.
+            improved_count = 0
+            for v_id in low_coverage_vector_ids:
+                vector_payload_path = os.path.join(extracted_dir, f"{v_id}.json")
+                if os.path.exists(vector_payload_path):
+                    try:
+                        with open(vector_payload_path, "r", encoding="utf-8") as f:
+                            p = json.load(f)
+                            if p.get("status") == "SUCCESS":
+                                improved_count += 1
+                    except Exception:
+                        pass
+            if low_coverage_vector_ids:
+                v2_eligible = (improved_count >= max(2, len(low_coverage_vector_ids) * 0.5)) or (len(low_coverage_vector_ids) == 1 and improved_count == 1)
                 
         # Step 4: Second Pass Synthesis if eligible
         if v2_eligible:
@@ -1468,11 +1523,24 @@ def api_research_export(session_id):
         return jsonify({"error": "Session not found"}), 404
         
     file_path = session.get("output_file_path")
-    if file_path and os.path.exists(file_path):
-        filename = os.path.basename(file_path)
-        return send_file(file_path, as_attachment=True, download_name=filename)
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"error": "No exportable document available for this session."}), 404
         
-    return jsonify({"error": "No exportable document available for this session."}), 404
+    req_format = request.args.get("format", "").strip().lower()
+    if req_format:
+        if req_format == "excel":
+            req_format = "xlsx"
+        session_dir = os.path.dirname(file_path)
+        target_path = os.path.join(session_dir, f"report.{req_format}")
+        if os.path.exists(target_path):
+            filename = f"scout_report_{session_id}.{req_format}"
+            mimetype = "text/html" if req_format == "html" else None
+            return send_file(target_path, as_attachment=True, download_name=filename, mimetype=mimetype)
+        else:
+            return jsonify({"error": f"Format '{req_format}' not found for this session."}), 404
+            
+    filename = os.path.basename(file_path)
+    return send_file(file_path, as_attachment=True, download_name=filename)
 
 
 @app.route("/api/research/sessions")

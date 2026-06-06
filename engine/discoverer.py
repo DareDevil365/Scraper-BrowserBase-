@@ -31,124 +31,88 @@ def _sanitize_ddg_query(query: str) -> str:
 
 def generate_clarifying_questions(query: str, context: str = '') -> dict:
     """
-    Takes the user's raw research query and uses Gemini with a Fast/Strong pass split to:
+    Takes the user's raw research query and uses Gemini with a single Mid-tier pass to:
     - Understand the topic and scope
     - Generate targeted clarifying questions and assumptions
     """
     if not extractor._clients:
         return {"success": False, "error": "Gemini not configured."}
 
-    # 1. Fast Pass (cheap tier) to get topic, scope, and obvious questions
-    fast_prompt = f"""You are a research planner. For the user query: "{query}" and context: "{context}", identify:
+    prompt = f"""You are a research planner. For the user query: "{query}" and context: "{context}", identify:
 1. Short name of the main subject/industry being researched (detected_topic).
 2. Brief description of the initial scope (detected_scope).
-3. 1-2 most obvious clarifying questions.
+3. 2-3 key assumptions that the user should confirm or correct.
+4. 3-4 clarifying questions (a mix of obvious questions and judgment-heavy questions like target geography, business models, specific metrics needed).
 
 Return as JSON matching this structure:
 {{
   "detected_topic": "...",
   "detected_scope": "...",
-  "obvious_questions": [
+  "assumptions": ["Assumption 1", "Assumption 2"],
+  "questions": [
     {{
-      "id": "q_id",
-      "question": "...",
+      "id": "unique_question_id",
+      "question": "The question text?",
       "options": ["Option A", "Option B"],
       "type": "select", // select, multi-select, or text
       "default": "Option A"
     }}
   ]
-}}
-Return ONLY valid JSON. No markdown code blocks, no explanation."""
-
-    detected_topic = ""
-    detected_scope = ""
-    obvious_questions = []
+}}"""
 
     try:
         response = extractor._call_gemini(
-            contents=fast_prompt,
-            tier="cheap",
-            judgment=False,
-            config=extractor.types.GenerateContentConfig(temperature=0.1)
+            contents=prompt,
+            config=extractor.types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json"
+            ),
+            tier="mid",
+            judgment=False
         )
         parsed = extractor._parse_json_response(response.text)
         if parsed and isinstance(parsed, dict):
             detected_topic = parsed.get("detected_topic", "")
             detected_scope = parsed.get("detected_scope", "")
-            obvious_questions = parsed.get("obvious_questions", [])
-    except Exception as e:
-        print(f"    [Fast Pass Clarification failed: {e}]")
-
-    # 2. Strong Pass (strong tier) to get assumptions and judgment-heavy questions
-    strong_prompt = f"""You are a master AI Research Planner. A user wants to research:
-Query: "{query}"
-Additional Context: "{context}"
-
-We have performed a fast pass and detected:
-Topic: "{detected_topic or 'Unknown'}"
-Initial Scope: "{detected_scope or 'Unknown'}"
-Obvious Questions: {json.dumps(obvious_questions)}
-
-Identify key ambiguities and assumptions.
-Generate 2-3 key assumptions that the user should confirm or correct.
-Generate 1-2 additional judgment-heavy clarifying questions (e.g., target geography, business models, specific metrics needed).
-
-Return as JSON matching this structure:
-{{
-  "assumptions": ["Assumption 1", "Assumption 2"],
-  "additional_questions": [
-    {{
-      "id": "unique_question_id",
-      "question": "...",
-      "options": ["Option A", "Option B"],
-      "type": "select",
-      "default": "Option A"
-    }}
-  ]
-}}
-Return ONLY valid JSON. No markdown code blocks, no explanation."""
-
-    assumptions = []
-    additional_questions = []
-    
-    try:
-        response = extractor._call_gemini(
-            contents=strong_prompt,
-            tier="strong",
-            judgment=True,
-            config=extractor.types.GenerateContentConfig(temperature=0.3)
-        )
-        parsed = extractor._parse_json_response(response.text)
-        if parsed and isinstance(parsed, dict):
             assumptions = parsed.get("assumptions", [])
-            additional_questions = parsed.get("additional_questions", [])
+            all_questions = parsed.get("questions", [])
+            
+            # Combine questions and add a default research depth question
+            has_depth_q = any("depth" in q.get("id", "").lower() or "depth" in q.get("question", "").lower() for q in all_questions)
+            if not has_depth_q:
+                all_questions.append({
+                    "id": "research_depth",
+                    "question": "What is the preferred depth of this research?",
+                    "options": ["Surface Level", "Medium Depth", "Deep Research"],
+                    "type": "select",
+                    "default": "Medium Depth"
+                })
+
+            return {
+                "success": True,
+                "questions": all_questions,
+                "assumptions": assumptions,
+                "detected_topic": detected_topic or query[:30],
+                "detected_scope": detected_scope or query,
+                "error": None
+            }
     except Exception as e:
-        print(f"    [Strong Pass Clarification failed: {e}]")
-        if not obvious_questions:
-            # Fallback if both passes failed or strong pass failed and cheap had nothing
-            return {"success": False, "error": f"Failed to plan research: {e}"}
-
-    # Combine questions and add a default research depth question
-    all_questions = obvious_questions + additional_questions
-    
-    # Check if a research depth question is already there
-    has_depth_q = any("depth" in q.get("id", "").lower() or "depth" in q.get("question", "").lower() for q in all_questions)
-    if not has_depth_q:
-        all_questions.append({
-            "id": "research_depth",
-            "question": "What is the preferred depth of this research?",
-            "options": ["Surface Level", "Medium Depth", "Deep Research"],
-            "type": "select",
-            "default": "Medium Depth"
-        })
-
-    # Return result
+        print(f"    [Clarification failed: {e}]")
+        
     return {
         "success": True,
-        "questions": all_questions,
-        "assumptions": assumptions,
-        "detected_topic": detected_topic or query[:30],
-        "detected_scope": detected_scope or query,
+        "questions": [
+            {
+                "id": "research_depth",
+                "question": "What is the preferred depth of this research?",
+                "options": ["Surface Level", "Medium Depth", "Deep Research"],
+                "type": "select",
+                "default": "Medium Depth"
+            }
+        ],
+        "assumptions": [],
+        "detected_topic": query[:30],
+        "detected_scope": query,
         "error": None
     }
 
@@ -194,16 +158,17 @@ Return your response in this exact JSON structure:
       "default": "Option A"
     }}
   ]
-}}
-
-Return ONLY valid JSON. No explanations, no markdown code blocks."""
+}}"""
 
     try:
         response = extractor._call_gemini(
             contents=prompt,
             tier="strong",
             judgment=True,
-            config=extractor.types.GenerateContentConfig(temperature=0.25)
+            config=extractor.types.GenerateContentConfig(
+                temperature=0.25,
+                response_mime_type="application/json"
+            )
         )
         raw_text = response.text
         parsed = extractor._parse_json_response(raw_text)
@@ -244,7 +209,7 @@ def refine_research_prompt(query: str, answers: list[dict], context: str = '') -
     """
     Takes the original query + user's answers to clarifying questions and generates:
     - A well-structured master research prompt (detailed, specific, unambiguous)
-    - A list of 5-10 research vectors (independent sub-topics to explore)
+    - A list of up to 30 research vectors (independent sub-topics to explore)
     - Suggested data points to extract per vector
     - Quality criteria for source selection
     - Effort estimate scaled by depth
@@ -260,49 +225,33 @@ def refine_research_prompt(query: str, answers: list[dict], context: str = '') -
         formatted_answers.append(f"Question {i+1}: {q_text}\nAnswer {i+1}: {a_text}\n")
     answers_transcript = "\n".join(formatted_answers)
     
-    prompt = f"""You are a master Research Architect and text expander. Your job is to take a raw research query, combine it with the user's explicit answers to clarifying questions, and compile a definitive, highly detailed, and fully expanded research plan/brief.
+    prompt = f"""You are a master Research Architect. Take the raw query, combine it with the clarification answers, and compile a detailed research plan.
 
-CRITICAL REQUIREMENT: Do NOT rewrite, change, summarize, or drop any of the user's original query, answers, or core requests. The `refined_prompt` and the list of `vectors` MUST completely cover every detail, background context, specific company list, and requirement mentioned by the user. You are strictly forbidden from omitting, grouping away, or dropping any target company, product, regulatory body, or constraint (e.g., volume tiers, shipping services) from either the `refined_prompt` or the `vectors` list.
-
-Specifically, inside the `refined_prompt` field of the returned JSON, you MUST structure it as follows:
-1. "ORIGINAL USER QUERY": Reproduce the original query verbatim.
-2. "CLARIFYING QUESTIONS & VERBATIM ANSWERS": List all the clarification questions and the user's answers verbatim.
-3. "DETAILED RESEARCH REQUIREMENTS & INSTRUCTIONS": Expand on the query, describing the specific goals, constraints, target geography/market (e.g. India-specific escrow/payments regulations if applicable), and detailed parameters to research.
-4. "REQUIRED DELIVERABLES CHECKLIST": Provide a clear, actionable list of all deliverables, comparisons, tables, Gantt charts, or flowcharts explicitly requested by the user.
+CRITICAL: Do NOT omit, summarize, or drop any user requests, target companies, or products. The vectors and refined_prompt MUST cover everything.
 
 Original Query: "{query}"
-Additional Context: "{context}"
-Clarification Answers Transcript:
+Context: "{context}"
+Answers Transcript:
 {answers_transcript}
 
-You must output a JSON object containing:
-1. `refined_prompt`: The expanded master prompt as described above. Ensure all user inputs and cross-questioning responses are preserved verbatim and built upon.
-2. `vectors`: A list of 5 to 10 independent research vectors (sub-topics/questions). Each vector should represent a distinct line of inquiry that can be researched in parallel. Crucially, ensure that every single target company, competitor, product, regulatory body, or specific research request mentioned in the original query or answers transcript is mapped to and addressed by at least one vector. Do not group them so broadly that specific companies or questions get merged or ignored; generate company-specific or detail-specific vectors as needed to ensure complete coverage.
-3. `suggested_data_points`: Specific, measurable data points/metrics to extract across the research.
-4. `quality_notes`: Specific instructions on what sources to trust based on the topic.
-5. `target_authority_domains`: A JSON list of specific domain names, TLD patterns, or official website strings that are highly relevant to and authoritative for this specific research topic. Identify and list these target domains/platforms dynamically based on the exact query to avoid domain drift.
-6. `required_deliverables`: A JSON checklist of all specific deliverables, questions, tables, comparisons, or items explicitly requested in the user's raw prompt or clarification replies.
-
-JSON structure:
+Output JSON structure:
 {{
-  "refined_prompt": "...",
+  "refined_prompt": "Expanded master prompt reproducing original query, answers, requirements, and deliverables verbatim.",
   "vectors": [
     {{
       "id": "vector_id",
-      "topic": "Vector Title (e.g., [Company Name] Logistics Pricing, Surcharges Comparison, Industry Benchmarks)",
-      "description": "Detailed explanation of what needs to be answered by this vector. Crucially, explicitly mention the specific target companies, products, or questions this vector is researching.",
-      "search_hints": ["keyword 1", "keyword 2"],
-      "data_points": ["parameter_1", "parameter_2"],
-      "priority": "high"
+      "topic": "Vector Title (granular, specific)",
+      "description": "Specific questions/topics this vector researches (mention target companies/products explicitly).",
+      "search_hints": ["keyword1", "keyword2"],
+      "data_points": ["param1", "param2"],
+      "priority": "high|medium|low"
     }}
   ],
-  "suggested_data_points": ["data point A", "data point B"],
-  "quality_notes": "...",
+  "suggested_data_points": ["metric A", "metric B"],
+  "quality_notes": "Source credibility guidelines.",
   "target_authority_domains": ["domain1.com", "domain2.gov"],
-  "required_deliverables": ["Checklist Item 1", "Checklist Item 2"]
-}}
-
-Return ONLY valid JSON. No explanations, no markdown blocks."""
+  "required_deliverables": ["Deliverable checklist item"]
+}}"""
 
     try:
         response = extractor._call_gemini(
@@ -311,6 +260,7 @@ Return ONLY valid JSON. No explanations, no markdown blocks."""
             judgment=True,
             config=extractor.types.GenerateContentConfig(
                 temperature=0.2,
+                response_mime_type="application/json"
             )
         )
         raw_text = response.text
@@ -386,74 +336,42 @@ def generate_blueprint(query: str, refined_prompt: str, vectors: list[dict], ans
     if not extractor._clients:
         return {"sections": [], "presentation_rules": {}}
 
-    prompt = f"""You are a master Document Architect. Your task is to design the ideal document blueprint/template structure for a comprehensive research report.
-    
-    Original Query: {query}
-    Refined Research Prompt & Deliverables:
-    {refined_prompt}
-    
-    Research Vectors:
-    {json.dumps(vectors, indent=2)}
-    
-    Clarification Answers:
-    {json.dumps(answers, indent=2)}
-    
-    You need to output a JSON object representing the document blueprint. The report should NOT use standard generic headings. It should have highly tailored, specific, and logical headings based on the query. For example, if the query is about "Competitor escrow for clothing startups in India", the sections could be:
-    - Escrow Regulatory & Compliance Landscape in India
-    - Key Transaction Milestones & Refund Trigger Workflows
-    - Competitor Escrow Comparison Matrix
-    - Platform-by-Platform Escrow Deep Dives (Craftsvilla, Jaypore, Glowroad, Meesho, etc.)
-    - Best Practices & Integration Roadmap for Silaai
-    
-    For each section, specify:
-    1. `id`: A unique string ID (e.g. `sec_compliance`, `sec_milestones`).
-    2. `heading`: The tailored section title.
-    3. `sub_headings`: An array of sub-heading strings.
-    4. `content_type`: The primary visual format of the content. Must be one of:
-       - `narrative` (paragraphs and lists)
-       - `narrative_with_flowchart` (text and a Mermaid flowchart)
-       - `flowchart` (primarily a Mermaid flowchart diagram)
-       - `comparison_table` (a markdown comparison table comparing entities/platforms)
-       - `data_matrix` (a structured parameters/data table)
-       - `timeline` (a Mermaid timeline/gantt chart showing a roadmap/milestones)
-    5. `mapped_vector_ids`: A list of IDs of the search vectors that contain relevant information for this heading. This connects search vectors to report sections (many-to-many).
-    6. `source_affinity`: A list of specific domains or source patterns (e.g. ["rbi.org.in", "razorpay.com"]) that are particularly authoritative for this heading's topic.
-    7. `instructions`: Specific guidance for the synthesizer on what to cover, what visual assets to produce, and what analysis to perform in this section. Make sure all requirements in the query and cross-questioning are fully covered.
-    
-    You must also output `presentation_rules`:
-    - `use_flowcharts_for`: process flows, payment flows, customer journeys, transaction triggers.
-    - `use_tables_for`: competitor parameter comparison, rate structures, feature tables.
-    - `use_timelines_for`: roadmaps, transaction milestones, rollouts.
-    - `embed_images`: true
-    
-    JSON structure:
+    prompt = f"""You are a Document Architect. Design a tailored document structure for a research report. Avoid generic headings.
+
+Original Query: {query}
+Refined Prompt: {refined_prompt}
+Vectors: {json.dumps(vectors)}
+Answers: {json.dumps(answers)}
+
+Output JSON:
+{{
+  "document_title": "Ideal Report Title",
+  "sections": [
     {{
-      "document_title": "Ideal Report Title",
-      "sections": [
-        {{
-          "id": "section_id",
-          "heading": "Section Heading",
-          "sub_headings": ["Sub-heading A", "Sub-heading B"],
-          "content_type": "narrative_with_flowchart",
-          "mapped_vector_ids": ["vector_id_1", "vector_id_2"],
-          "source_affinity": ["domain1.com"],
-          "instructions": "Detailed synthesizer instructions..."
-        }}
-      ],
-      "presentation_rules": {{
-        "use_flowcharts_for": [...],
-        "use_tables_for": [...],
-        "use_timelines_for": [...],
-        "embed_images": true
-      }}
+      "id": "section_id",
+      "heading": "Tailored Section Title",
+      "sub_headings": ["Sub-heading A"],
+      "content_type": "narrative|narrative_with_flowchart|flowchart|comparison_table|data_matrix|timeline",
+      "mapped_vector_ids": ["vector_id_1"],
+      "source_affinity": ["domain.com"],
+      "instructions": "Specific guidance for the synthesizer on what to cover."
     }}
-    
-    Return ONLY valid JSON. No markdown formatting blocks or explanations."""
+  ],
+  "presentation_rules": {{
+    "use_flowcharts_for": ["process flows"],
+    "use_tables_for": ["comparisons"],
+    "use_timelines_for": ["roadmaps"],
+    "embed_images": true
+  }}
+}}"""
 
     try:
         response = extractor._call_gemini(
             contents=prompt,
-            config=extractor.types.GenerateContentConfig(temperature=0.2),
+            config=extractor.types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json"
+            ),
             tier="strong",
             judgment=True
         )
@@ -474,12 +392,8 @@ def generate_search_queries(vector: dict, context: str = '', depth: str = 'stand
     - standard: 8 queries
     - deep: 15 queries
     """
-    if not extractor._clients:
-        return []
-
     topic = vector.get("topic", "")
-    description = vector.get("description", "")
-    hints = ", ".join(vector.get("search_hints", []))
+    hints = vector.get("search_hints", [])
     
     num_queries = 8
     if depth == "surface":
@@ -487,41 +401,42 @@ def generate_search_queries(vector: dict, context: str = '', depth: str = 'stand
     elif depth == "deep":
         num_queries = 15
 
-    prompt = f"""You are a search query expert. Generate exactly {num_queries} simple search queries for DuckDuckGo to find information on the following research sub-topic.
+    entity = topic
+    words = topic.split()
+    if len(words) > 1:
+        entity = words[0]
+        
+    templates = [
+        "{topic} {hint}",
+        "{topic} official site",
+        "{topic} pricing details",
+        "{topic} guide and documentation",
+        "{entity} competitor analysis",
+        "{topic} review opinion",
+        "{topic} features and comparison",
+        "{entity} {hint} india",
+        "official {topic} documentation",
+        "how to integrate {entity} {hint}",
+        "{topic} rules and regulations",
+        "{topic} limits and fees",
+        "{topic} process flow",
+        "{entity} API specs",
+        "{topic} latest updates 2025"
+    ]
+    
+    queries = []
+    for i, temp in enumerate(templates):
+        hint = hints[i % len(hints)] if hints else "details"
+        q = temp.format(topic=topic, entity=entity, hint=hint)
+        clean_q = _sanitize_ddg_query(q)
+        if clean_q and clean_q not in queries:
+            queries.append(clean_q)
+            
+    while len(queries) < num_queries:
+        queries.append(_sanitize_ddg_query(f"{topic} details {len(queries)}"))
+        
+    return queries[:num_queries]
 
-Sub-Topic/Vector: "{topic}"
-Description: "{description}"
-Keywords/Hints: {hints}
-Overall Context: "{context}"
-
-CRITICAL RULES FOR QUERY FORMAT:
-- Write plain, natural-language queries only
-- Do NOT use any search operators: no site:, no OR, no AND, no parentheses, no quotes, no filetype:, no range operators like 2023..2025
-- Keep each query SHORT (under 10 words ideally)
-- Distribute queries to cover different source types: consulting reports, government databases, official company sites, libraries, and broad general query angles.
-
-Return a JSON array of exactly {num_queries} query strings:
-[
-  "query 1",
-  "query 2",
-  ...
-]
-
-Return ONLY JSON. No explanations, no markdown blocks."""
-
-    try:
-        response = extractor._call_gemini(
-            contents=prompt,
-            config=extractor.types.GenerateContentConfig(temperature=0.2),
-            tier="cheap",
-            judgment=False
-        )
-        parsed = extractor._parse_json_response(response.text)
-        if parsed and isinstance(parsed, list):
-            return [_sanitize_ddg_query(q) for q in parsed if isinstance(q, str)]
-        return [f"{topic} research", f"{topic} data", f"{topic} report"]
-    except Exception:
-        return [f"{topic} research", f"{topic} data", f"{topic} report"]
 
 
 # Maintain backwards compatibility

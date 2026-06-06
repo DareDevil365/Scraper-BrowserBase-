@@ -56,6 +56,13 @@ body {
     display: flex;
     align-items: center;
     gap: 14px;
+    cursor: pointer;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.logo:hover {
+    transform: scale(1.02);
+    opacity: 0.95;
 }
 
 .logo-icon {

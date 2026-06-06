@@ -539,6 +539,36 @@ async def _human_scroll(page):
 
 async def _extract_main_content(page) -> str:
     """Extract the most relevant content area from the page."""
+    # Prune DOM-level boilerplate elements client-side first
+    try:
+        prune_js = """
+        () => {
+            const selectors = [
+                '.cookie', '#cookie', '[class*="cookie" i]', '[id*="cookie" i]', '[class*="consent" i]', '[id*="consent" i]',
+                '.share', '.social-share', '[class*="share" i]', '[class*="social-" i]',
+                '.newsletter', '.popup', '.modal-content', '[class*="newsletter" i]', '[class*="popup" i]', '[class*="modal" i]',
+                'header', 'footer', 'nav', '[role="navigation"]'
+            ];
+            let count = 0;
+            for (const sel of selectors) {
+                try {
+                    const elements = document.querySelectorAll(sel);
+                    for (const el of elements) {
+                        if (el.tagName === 'BODY' || el.tagName === 'HTML') continue;
+                        el.remove();
+                        count++;
+                    }
+                } catch (e) {}
+            }
+            return count;
+        }
+        """
+        removed_count = await page.evaluate(prune_js)
+        if removed_count > 0:
+            print(f"    [DOM Pruner] Removed {removed_count} boilerplate elements from DOM.")
+    except Exception as e:
+        print(f"    [DOM Pruner] Failed to prune DOM: {e}")
+
     for selector in ["main", "article", "[role='main']", "#content", ".content", "#main", ".main-content"]:
         try:
             el = page.locator(selector).first

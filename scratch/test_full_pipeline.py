@@ -91,8 +91,8 @@ print("=" * 60)
 print("STEP 1: Planning")
 print("=" * 60)
 r, t = timed_post(f"{BASE}/api/research/plan", {
-    "query": "Compare pricing and features of top 3 cloud storage providers: Google Drive, Dropbox, OneDrive",
-    "context": "Focus on business plans, storage limits, and collaboration features"
+    "query": "Google Drive business plan pricing",
+    "context": "Focus on 2025 business pricing plans"
 })
 plan = r.json()
 print(f"  Plan took: {t:.1f}s")
@@ -117,7 +117,7 @@ answers = []
 for q in questions:
     answers.append({
         "question_id": q.get("id"),
-        "answer": q.get("default", q.get("options", [""])[0])
+        "answer": q.get("default", (q.get("options") or [""])[0] if q.get("options") else "")
     })
 # Override depth to Surface for speed test
 for a in answers:

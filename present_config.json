@@ -15,9 +15,13 @@
     "body_precedence": {
         "_note": "Order present.py searches for the prose body; first existing wins (§8.3).",
         "order": [
+            "final_report_v2.txt",
             "final_report_v2.md",
+            "final_report_v1.txt",
             "final_report_v1.md",
+            "final_report_fallback.txt",
             "final_report_fallback.md",
+            "partial_report.txt",
             "partial_report.md"
         ]
     },
