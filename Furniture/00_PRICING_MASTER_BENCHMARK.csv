@@ -1,0 +1,27 @@
+﻿Brand,Segment,Starting_Price_INR,Typical_Range_INR,Source_Type,Primary_Source_URL,Has_Public_MRP,Notes
+HomeLane,Domestic Premium,120000,"3,00,000 - 6,50,000",Brand Website + NoBroker,https://www.homelane.com/modular-kitchen-designs,YES,10yr warranty; online calculator available
+Livspace,Domestic Premium,130000,"3,00,000 - 7,00,000",Brand Website (livspace.com),https://www.livspace.com/in/interiors/kitchen-price-calculator,YES,Official published starting price Rs.1.3L; 3 packages
+Design Cafe,Domestic Premium,120000,"2,50,000 - 6,00,000",designcafe.com + Scribd Real Quote,https://www.designcafe.com/modular-kitchen-cost-calculator,YES,Real customer quote on Scribd; calculator available
+Godrej Interio,Domestic Premium,150000,"3,00,000 - 7,00,000",godrejinterio.com + Scribd Price List,https://www.scribd.com/document/579013907/godrej-modular-kitchen-price-list-446,PARTIAL,Scribd price list uploaded; per-sq-ft varies by material
+Sleek AsianPaints,Domestic Premium,140000,"2,50,000 - 5,50,000",asianpaints.com + sleekworld.com + slepune.com,https://www.sleekworld.com/,PARTIAL,Finish-tier breakdown from slepune.com (dealer research)
+IFB,Domestic Premium,155000,"2,00,000 - 4,99,000",modularkitchen.ifbappliances.com,https://modularkitchen.ifbappliances.com/,YES,Model-based pricing; limited to 4 cities
+Spacewood,Domestic Premium,299000,"4,00,000 - 7,00,000",spacewood.in OFFICIAL,https://spacewood.in/modular-kitchen-designs/,YES,Rs.2.99L OFFICIALLY published on spacewood.in
+Wurfel,Domestic Premium,300000,"3,50,000 - 8,50,000",wurfel.in + NoBroker + Scribd,https://wurfel.in/,PARTIAL,Layout-based pricing confirmed from multiple sources
+Hafele,Domestic Premium (Hardware),250000,"5,00,000 - 15,00,000",NoBroker + hafeleindia.com,https://www.nobroker.in/forum/what-is-the-cost-of-hafele-modular-kitchen/,NO,Hardware-focused; Rs.2500-Rs.10000/sqft (NoBroker meta)
+Panasonic,Domestic Premium,300000,"3,00,000 - 6,00,000+",lsin.panasonic.com + YouTube,https://lsin.panasonic.com/,PARTIAL,L-Class + I-Class ranges; confirmed via YouTube reviews
+Casantro,Domestic Luxury,500000,"5,00,000 - 10,00,000",casantro.com + thearchitectsdiary.com,https://casantro.com/,NO,B2B brand; no public MRP; IndiaMART luxury benchmark
+Arttdinox,Domestic Luxury SS,550000,"8,25,000 - 20,00,000+",arttdinox.com + NoBroker + IndiaMART SS,https://arttdinox.com/,NO,7 cross-referenced sources; 60-120% brand premium over unbranded SS
+Itallica,Domestic Boutique,,,tradeindia.com,https://www.tradeindia.com/Seller-4131580-ITALICA-MODULAR-FURNITURE/,NO,Contact for quotation
+Nobilia,German Luxury,350000,"8,00,000 - 25,00,000",nobiliaindia.in + IndiaMART German Category,https://www.nobiliaindia.in/,NO,Price Groups PG1-9 from official typenliste; 10yr warranty
+Hacker,German Luxury,400000,"8,50,000 - 28,00,000",haecker-india.com + IndiaMART German,https://haecker-india.com/,NO,AT-AV to Individual series; dealer consultation
+Nolte,German Luxury,450000,"9,00,000 - 30,00,000",nolteindia.com + Scribd 2024 Catalog,https://www.scribd.com/document/820407790/NOLTE-Meine-Kueche-2024-Web-En,NO,Official 2024 catalog on Scribd; Series 800-900
+Hafele (German HW),German Premium,,,,https://home.hafeleindia.com/,NO,Hardware/fittings brand; see Hafele row above
+SieMatic,German Ultra-Luxury,1000000,"1,50,00,000 - 6,00,00,000+",siematic.com + Scribd + IndiaMART,https://www.siematic.com/en/,NO,No public MRP; BOQ only; Rs.15L-60L project range
+Poggenpohl,German Ultra-Luxury,1200000,"2,00,00,000 - 8,00,00,000+",poggenpohl.com + Scribd,https://www.poggenpohl.com/,NO,Worlds oldest kitchen brand est.1892; BOQ only
+Boffi,Italian Ultra-Luxury,1500000,"2,50,00,000 - 2,00,00,000+",boffi.com + Scribd 2022 Catalog,https://www.scribd.com/document/1036202576/Boffi-Kitchenology-2022,NO,India dealer: Studio Creo New Delhi (011-46002100)
+Poliform,Italian Ultra-Luxury,1500000,"2,50,00,000 - 1,50,00,000+",poliform.it + IndiaMART Italian,https://www.poliform.it/en/kitchens/,NO,No public MRP; BOQ only; Rs.15L-50L+ project range
+Snaidero,Italian Luxury,1200000,"2,00,00,000 - 1,00,00,000+",snaidero.com + Scribd,https://id.scribd.com/document/663275531/Snaidero-Kichen,NO,Pininfarina design ICONE collection; BOQ only
+Pedini,Italian Ultra-Luxury,1500000,"2,50,00,000 - 2,00,00,000+",pedini.it + IndiaMART Italian,https://www.pedini.it/en/cucine/,NO,Ultra-luxury bespoke; BOQ only via luxury architects
+Scavolini,Italian Luxury,800000,"1,50,00,000 - 6,00,00,000+",scavolini.com + IndiaMART Italian,https://www.scavolini.com/ww/kitchens,NO,No public INR pricing; IndiaMART proxy
+Veneta Cucine,Italian Luxury,800000,"1,50,00,000 - 7,00,00,000+",venetacucineindia.com + Scribd 2023,https://it.scribd.com/document/703034921/Veneta-cucine-Nuovo-Catalogo-Spazio-Aumentato-It-En,NO,India number: +91 99008 10530; 120-135 day delivery from Italy
+Lineadecor,Italian Boutique,,,lineadecor.com,https://lineadecor.com/en/,NO,No fixed price; custom BOQ only

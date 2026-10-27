@@ -1,26 +1,26 @@
 /* RunawayScout — Dark Premium Theme */
 
 :root {
-    --bg-deepest: #030712;
-    --bg-deep: #0a0f1e;
-    --bg-card: #111827;
-    --bg-input: #060b18;
-    --border: #1e293b;
-    --border-hover: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
-    --accent: #818cf8;
-    --accent-dim: rgba(129, 140, 248, 0.15);
-    --accent-glow: rgba(129, 140, 248, 0.3);
+    --bg-deepest: #0b0b0c;
+    --bg-deep: #121214;
+    --bg-card: rgba(20, 20, 22, 0.65);
+    --bg-input: rgba(10, 10, 12, 0.6);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-hover: rgba(255, 255, 255, 0.15);
+    --text-primary: #f5f5f7;
+    --text-secondary: #a1a1a6;
+    --text-muted: #6e6e73;
+    --accent: #e50914;
+    --accent-dim: rgba(229, 9, 20, 0.12);
+    --accent-glow: rgba(229, 9, 20, 0.35);
     --green: #34d399;
     --green-dim: rgba(52, 211, 153, 0.15);
     --amber: #fbbf24;
     --amber-dim: rgba(251, 191, 36, 0.15);
-    --red: #f87171;
-    --red-dim: rgba(248, 113, 113, 0.15);
-    --radius: 12px;
-    --radius-sm: 8px;
+    --red: #e50914;
+    --red-dim: rgba(229, 9, 20, 0.15);
+    --radius: 20px;
+    --radius-sm: 10px;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -198,64 +198,68 @@ body {
 
 .form-group label {
     display: block;
-    font-size: 0.78rem;
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin-bottom: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #e50914; /* Project Raven Red */
+    margin-bottom: 8px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
 }
 
 .input {
     width: 100%;
     background: var(--bg-input);
-    border: 1px solid var(--border);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: var(--radius-sm);
-    padding: 12px 16px;
-    font-size: 0.9rem;
+    padding: 14px 18px;
+    font-size: 0.95rem;
     color: var(--text-primary);
     font-family: inherit;
-    transition: all 0.2s;
+    transition: all 0.25s ease;
     outline: none;
 }
 
 .input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-dim);
+    border-color: #e50914;
+    box-shadow: 0 0 12px rgba(229, 9, 20, 0.2);
 }
 
 .input::placeholder {
-    color: var(--text-muted);
+    color: rgba(229, 9, 20, 0.45);
 }
 
 .textarea {
     resize: vertical;
-    min-height: 60px;
+    min-height: 80px;
 }
-
-
 
 /* --- BUTTONS --- */
 .btn-primary {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 12px 28px;
-    background: linear-gradient(135deg, var(--accent), #6366f1);
-    border: none;
-    border-radius: var(--radius-sm);
-    color: white;
-    font-size: 0.9rem;
-    font-weight: 600;
+    gap: 10px;
+    padding: 12px 32px;
+    background: #18181b;
+    border: 1px solid rgba(229, 9, 20, 0.45);
+    border-radius: 100px; /* Pill button */
+    color: #e50914; /* Bold red text */
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
     cursor: pointer;
-    transition: all 0.25s;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     font-family: inherit;
     margin-top: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
 }
 
 .btn-primary:hover {
     transform: translateY(-1px);
-    box-shadow: 0 8px 25px var(--accent-glow);
+    background: #e50914;
+    color: #ffffff;
+    border-color: #e50914;
+    box-shadow: 0 0 20px rgba(229, 9, 20, 0.5);
 }
 
 .btn-primary:active {
@@ -263,7 +267,7 @@ body {
 }
 
 .btn-primary:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
@@ -1286,3 +1290,85 @@ select.input {
     z-index: 199;
     animation: fadeIn 0.2s ease;
 }
+
+/* --- JARVIS HUD STYLING --- */
+.hud-container {
+    position: fixed;
+    bottom: -150px;
+    right: -150px;
+    width: 600px;
+    height: 600px;
+    z-index: 1;
+    pointer-events: none;
+    user-select: none;
+    opacity: 0.85;
+}
+
+@media (max-width: 992px) {
+    .hud-container {
+        width: 400px;
+        height: 400px;
+        bottom: -100px;
+        right: -100px;
+        opacity: 0.6;
+    }
+}
+
+.hud-ring-outer {
+    transform-origin: 300px 300px;
+    animation: spinClockwise 45s linear infinite;
+}
+
+.hud-ring-mid {
+    transform-origin: 300px 300px;
+    animation: spinCounterClockwise 30s linear infinite;
+}
+
+.hud-ring-inner {
+    transform-origin: 300px 300px;
+    animation: spinClockwise 18s linear infinite;
+}
+
+.hud-reactor-core {
+    transform-origin: 300px 300px;
+    animation: pulseGlow 3.5s ease-in-out infinite;
+}
+
+.hud-text-rotate {
+    transform-origin: 300px 300px;
+    animation: spinCounterClockwise 60s linear infinite;
+}
+
+@keyframes spinClockwise {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes spinCounterClockwise {
+    from { transform: rotate(360deg); }
+    to { transform: rotate(0deg); }
+}
+
+@keyframes pulseGlow {
+    0%, 100% { filter: drop-shadow(0 0 2px rgba(229, 9, 20, 0.5)); opacity: 0.8; }
+    50% { filter: drop-shadow(0 0 16px rgba(229, 9, 20, 0.95)); opacity: 1; }
+}
+
+/* Glassmorphism adjustment for main cards */
+.studio-card {
+    background: rgba(20, 20, 22, 0.55) !important;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+    z-index: 2;
+}
+
+.header {
+    background: rgba(11, 11, 12, 0.8) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    z-index: 10;
+}
+

@@ -204,29 +204,21 @@
     <header class="header">
         <div class="header-inner">
             <div class="logo" onclick="startNewResearchGlobal()" title="Start New Research">
-                <div class="logo-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-                    </svg>
-                </div>
                 <div>
-                    <h1>RunawayScout</h1>
-                    <p class="logo-sub">AI Research Studio</p>
+                    <h1 style="background: none; -webkit-text-fill-color: initial; color: #ffffff;">Project Raven</h1>
+                    <p class="logo-sub">Intelligent Agentic OS</p>
                 </div>
             </div>
             <div class="header-right">
-                <button class="btn-history" id="btnToggleHistory" onclick="toggleHistory()" title="Research History">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                    </svg>
+                <button class="btn-history" id="btnToggleHistory" onclick="toggleHistory()" title="Research History" style="border: none; color: #ffffff;">
                     <span>History</span>
                 </button>
-                <button class="btn-config" onclick="showConfigModal()" title="Settings">
+                <button class="btn-config" onclick="showConfigModal()" title="Settings" style="border-radius: 50%;">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                         <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
                     </svg>
                 </button>
-                <div class="header-status" id="statusBadge">
+                <div class="header-status" id="statusBadge" style="background: rgba(52, 211, 153, 0.08); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 100px;">
                     <span class="status-dot"></span> Ready
                 </div>
             </div>
@@ -307,21 +299,17 @@
         <div class="studio-container">
             <!-- STEP 1: INITIAL TOPIC INPUT -->
             <section id="step-query" class="studio-card">
-                <div class="card-header-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-                    </svg>
-                </div>
-                <h2>What would you like to research or compare?</h2>
-                <p class="card-desc">Enter any research topic, market segment, product comparison, or list of competitors. The AI will design a targeted blueprint and gather high-quality sources.</p>
+                <h2 style="display: none;">What would you like to research or compare?</h2>
+                <p class="card-desc" style="display: none;">Enter any research topic, market segment, product comparison, or list of competitors. The AI will design a targeted blueprint and gather high-quality sources.</p>
                 
                 <div class="form-group">
+                    <label>Ask your query</label>
                     <textarea id="researchQuery" rows="3" placeholder="Compare the top 5 serverless database systems on pricing model, connection limits, and latency..." class="input textarea"></textarea>
                 </div>
                 
                 <div class="form-group">
-                    <label>Additional Details or Guidelines (optional)</label>
-                    <input type="text" id="researchContext" class="input" placeholder="e.g., Focus on US and EU pricing models, include DynamoDB..." />
+                    <label>Guidelines (Options)</label>
+                    <textarea id="researchContext" rows="2" class="input textarea" placeholder="e.g., Focus on US and EU pricing models, include DynamoDB..."></textarea>
                 </div>
 
                 <div class="form-row">
@@ -337,10 +325,7 @@
                 </div>
                 
                 <button class="btn-primary" id="btnInitResearch" onclick="initiateResearch()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
-                        <polygon points="5 3 19 12 5 21 5 3"/>
-                    </svg>
-                    Analyze & Plan
+                    <span>Analyse</span>
                 </button>
             </section>
 
@@ -523,6 +508,81 @@
             </div>
         </div>
     </main>
+
+    <!-- Circular Jarvis HUD Graphic (Project Raven Design) -->
+    <div class="hud-container">
+        <svg viewBox="0 0 600 600" width="100%" height="100%">
+            <!-- Glowing background aura -->
+            <defs>
+                <radialGradient id="hudGlow" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#e50914" stop-opacity="0.12" />
+                    <stop offset="100%" stop-color="#e50914" stop-opacity="0" />
+                </radialGradient>
+            </defs>
+            <circle cx="300" cy="300" r="280" fill="url(#hudGlow)" />
+            
+            <!-- Outer dashed ring spinning clockwise -->
+            <g class="hud-ring-outer">
+                <circle cx="300" cy="300" r="260" fill="none" stroke="#e50914" stroke-width="1.5" stroke-dasharray="8 16" opacity="0.35" />
+                <circle cx="300" cy="300" r="250" fill="none" stroke="#e50914" stroke-width="1" stroke-dasharray="40 10 5 10" opacity="0.25" />
+            </g>
+            
+            <!-- Mid ring spinning counter-clockwise -->
+            <g class="hud-ring-mid">
+                <circle cx="300" cy="300" r="230" fill="none" stroke="#e50914" stroke-width="2" stroke-dasharray="100 20 40 20" opacity="0.5" />
+                <circle cx="300" cy="300" r="222" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-dasharray="4 8" opacity="0.3" />
+                <path d="M 300,70 A 230,230 0 0,1 530,300" fill="none" stroke="#e50914" stroke-width="4.5" opacity="0.45" />
+                <path d="M 70,300 A 230,230 0 0,1 300,70" fill="none" stroke="#e50914" stroke-width="3" stroke-dasharray="6 3" opacity="0.4" />
+            </g>
+            
+            <!-- Inner ring spinning clockwise -->
+            <g class="hud-ring-inner">
+                <circle cx="300" cy="300" r="180" fill="none" stroke="#e50914" stroke-width="1" stroke-dasharray="12 6 4 6" opacity="0.4" />
+                <circle cx="300" cy="300" r="172" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-dasharray="30 150" opacity="0.5" />
+                <circle cx="300" cy="300" r="160" fill="none" stroke="#e50914" stroke-width="3" stroke-dasharray="2 6" opacity="0.35" />
+            </g>
+            
+            <!-- Rotating HUD Text ring -->
+            <g class="hud-text-rotate">
+                <path id="textCircle" d="M 300,135 A 165,165 0 1,1 299,135" fill="none" stroke="none" />
+                <text font-family="'Outfit', sans-serif" font-size="9" fill="#e50914" letter-spacing="3" opacity="0.6">
+                    <textPath href="#textCircle" startOffset="0%">
+                        SYSTEM DIAGNOSTICS ACTIVE • ANALYSIS ENGINE ONLINE • MATRIX COMPILING • 76% SECURE
+                    </textPath>
+                </text>
+            </g>
+            
+            <!-- Centered Core (Iron Man Arc Reactor) pulsing -->
+            <g class="hud-reactor-core">
+                <circle cx="300" cy="300" r="70" fill="none" stroke="#e50914" stroke-width="1" opacity="0.15" />
+                <circle cx="300" cy="300" r="60" fill="none" stroke="#e50914" stroke-width="2" opacity="0.4" />
+                <circle cx="300" cy="300" r="50" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-dasharray="6 3" opacity="0.5" />
+                
+                <!-- Arc Reactor triangular blades -->
+                <polygon points="300,245 285,265 315,265" fill="#e50914" opacity="0.65" />
+                <polygon points="300,355 285,335 315,335" fill="#e50914" opacity="0.65" />
+                <polygon points="245,300 265,285 265,315" fill="#e50914" opacity="0.65" />
+                <polygon points="355,300 335,285 335,315" fill="#e50914" opacity="0.65" />
+                
+                <circle cx="300" cy="300" r="28" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.75" />
+                <circle cx="300" cy="300" r="16" fill="#e50914" opacity="0.85" />
+                <circle cx="300" cy="300" r="8" fill="#ffffff" opacity="0.9" />
+            </g>
+            
+            <!-- Fixed data labels / HUD stats around the circle -->
+            <text x="430" y="210" font-family="'Outfit', sans-serif" font-size="11" font-weight="600" fill="#ffffff" opacity="0.75">SYS LNK: 76%</text>
+            <text x="430" y="225" font-family="'Outfit', sans-serif" font-size="9" fill="#e50914" opacity="0.65">ONLINE</text>
+            
+            <text x="110" y="190" font-family="'Outfit', sans-serif" font-size="11" font-weight="600" fill="#ffffff" opacity="0.75">MEM USE: 14%</text>
+            <text x="110" y="205" font-family="'Outfit', sans-serif" font-size="9" fill="#e50914" opacity="0.65">STABLE</text>
+            
+            <text x="90" y="410" font-family="'Outfit', sans-serif" font-size="11" font-weight="600" fill="#ffffff" opacity="0.75">CORE TMP: 23°C</text>
+            <text x="90" y="425" font-family="'Outfit', sans-serif" font-size="9" fill="#e50914" opacity="0.65">NOMINAL</text>
+            
+            <text x="430" y="400" font-family="'Outfit', sans-serif" font-size="11" font-weight="600" fill="#ffffff" opacity="0.75">NET SIG: 45dB</text>
+            <text x="430" y="415" font-family="'Outfit', sans-serif" font-size="9" fill="#e50914" opacity="0.65">SECURE</text>
+        </svg>
+    </div>
 
     <script src="/static/app.js"></script>
 </body>
